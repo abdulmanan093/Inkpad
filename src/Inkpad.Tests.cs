@@ -110,6 +110,7 @@ static class InkpadTests
         TestHeadingMenu(directory, editor, note, root);
         TestCheckboxes(directory, editor, note, root);
         TestChecklist(directory, editor, note, root);
+        TestCheckboxColors(directory, editor, note, root);
         Require(note.TextBox.ActualHeight > 400 && note.Ink.ActualHeight == note.TextBox.ActualHeight, "Editor and ink layer share a full-height page");
         Require(!note.Ink.IsHitTestVisible, "Typing mode permits text input");
         note.SetPlainText(string.Join("\n", Enumerable.Repeat("A line in a long note", 240)));
@@ -160,6 +161,72 @@ static class InkpadTests
         RenderPreview(directory, editor, note, root, rectangle);
         VerifyWindowReopen(directory);
         application.Shutdown();
+    }
+
+    static void TestCheckboxColors(string directory, Inkpad editor, Note note, FrameworkElement root)
+    {
+        var buttons = Descendants(root).OfType<Button>().ToArray();
+        var picker = buttons.Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Checkbox color");
+        var insert = buttons.Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Insert checkbox (Ctrl+Shift+Space)");
+        var blue = picker.ContextMenu.Items.OfType<MenuItem>().Single(item => (string)item.Header == "Blue");
+        var reset = picker.ContextMenu.Items.OfType<MenuItem>().Single(item => (string)item.Header == "Default");
+        var custom = Color.FromRgb(157, 43, 112);
+        var editorBox = note.TextBox;
+        note.SetPlainText("One two");
+        var line = (Paragraph)editorBox.Document.Blocks.FirstBlock;
+        var run = (Run)line.Inlines.FirstInline;
+        editorBox.CaretPosition = run.ContentStart.GetPositionAtOffset(4);
+        blue.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, blue));
+        insert.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, insert));
+        var glyph = FirstCheckbox(line);
+        Require(CheckboxColor(glyph) == Color.FromRgb(23, 92, 184) && note.NeedsInkFile, "Use the toolbar color on a new checkbox and save as a formatted note");
+        Require(CheckboxColor(new TextRange(line.ContentStart, glyph.Start)) == Colors.Black &&
+            CheckboxColor(new TextRange(glyph.End, line.ContentEnd)) == Colors.Black, "Leave the text around the checkbox black");
+        editorBox.Selection.Select(line.ContentStart, line.ContentEnd);
+        Require(Inkpad.RecolorCheckboxes(note, new SolidColorBrush(custom)) && CheckboxColor(FirstCheckbox(line)) == custom,
+            "Apply a custom color only to the checkbox in selected text");
+        Inkpad.ToggleCheckbox(note, FirstCheckbox(line));
+        Require(CheckboxColor(FirstCheckbox(line)) == custom && FirstCheckbox(line).Text == Inkpad.CheckedCheckbox,
+            "Preserve color when the checkbox is checked");
+        editorBox.Undo();
+        Require(CheckboxColor(FirstCheckbox(line)) == custom && FirstCheckbox(line).Text == Inkpad.EmptyCheckbox,
+            "Undo a toggle without losing the color");
+        editorBox.Redo();
+
+        string path = Path.Combine(directory, "colored-checkbox.inknote");
+        NoteFiles.Save(note, path, false);
+        var loaded = new Note();
+        NoteFiles.Load(loaded, path);
+        var loadedGlyph = FirstCheckbox((Paragraph)loaded.TextBox.Document.Blocks.FirstBlock);
+        Require(loadedGlyph.Text == Inkpad.CheckedCheckbox && CheckboxColor(loadedGlyph) == custom, "Reopen a colored checkbox with its mark and custom RGB color");
+        var plain = Path.Combine(directory, "colored-checkbox.txt");
+        NoteFiles.Save(note, plain, true);
+        Require(File.ReadAllText(plain).Contains(Inkpad.CheckedCheckbox), "Keep the checked mark in a plain-text export");
+
+        note.SetPlainText("Checklist item");
+        line = (Paragraph)editorBox.Document.Blocks.FirstBlock;
+        editorBox.CaretPosition = line.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
+        Call(editor, "SetCheckboxColor", new SolidColorBrush(custom));
+        Call(editor, "StartChecklist");
+        editorBox.CaretPosition = line.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
+        Require(Inkpad.ContinueChecklist(note), "Continue a colored checklist");
+        var next = (Paragraph)line.NextBlock;
+        Require(CheckboxColor(FirstCheckbox(next)) == custom && FirstCheckbox(next).Text == Inkpad.EmptyCheckbox, "Use the previous checklist item’s color on the next unchecked box");
+        var marker = FirstCheckbox(next);
+        editorBox.Selection.Select(marker.Start, marker.End);
+        reset.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, reset));
+        Require(CheckboxColor(FirstCheckbox(next)) == Colors.Black, "Restore the default checkbox color");
+        note.SetPlainText("");
+        note.Formatted = false;
+        note.Dirty = false;
+        Call(editor, "UpdateTabs");
+        Call(editor, "UpdateStatus");
+        Layout(root);
+    }
+
+    static Color CheckboxColor(TextRange range)
+    {
+        return ((SolidColorBrush)range.GetPropertyValue(TextElement.ForegroundProperty)).Color;
     }
 
     static void TestCheckboxes(string directory, Inkpad editor, Note note, FrameworkElement root)

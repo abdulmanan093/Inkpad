@@ -21,6 +21,7 @@ In Inkpad, open the gear menu and turn on **Show Edit in Inkpad in File Explorer
 - **Tabs and files.** Press **Ctrl+N** for a new tab, **Ctrl+O** to open files, **Ctrl+Tab** to switch tabs, and **Ctrl+W** to close the current tab. You can also drag local files into the window. Inkpad remembers its window position, size, and maximized state.
 - **Text and formatting.** Use the toolbar for heading styles, bulleted and numbered lists, bold, italic, and strikethrough. Press **Ctrl+F** to find text. Use **Ctrl+K** to add a web link and **Ctrl+click** to open a link.
 - **Inline checkboxes.** Put the caret where you want the box and click the checkbox icon or press **Ctrl+Shift+Space**. Click the box to toggle it. You can also put the caret next to a box and press **Ctrl+Space**.
+- **Checkbox colors.** Open the color swatch next to the checkbox icon. Pick a preset or choose **More colors…** for a custom RGB color. The color applies to the outline and check mark. Select existing boxes or place the caret directly next to one to recolor it. Pressing Enter in a colored checklist carries that item's color to the next box.
 - **Checklists.** Choose **Checklist** from the list menu or press **Ctrl+Shift+L**. Press **Enter** on a line with an item to create the next unchecked box. Press **Enter** on an empty item to end the list. Indentation is carried to the next item.
 - **Tables.** Open the table grid and pick the number of rows and columns. Press **Tab** or **Shift+Tab** to move between cells. Right-click a cell or reopen the toolbar’s table menu to insert or remove rows and columns.
 - **Drawing.** Click **Draw** or press **Ctrl+D**. Choose a pencil color and thickness, or select a line, arrow, rectangle, ellipse, or triangle under **Shapes**. Hold **Shift** while dragging to snap the line angle or constrain the shape. Use the eraser to remove a stroke. In drawing mode, **Ctrl+Z** and **Ctrl+Y** undo and redo ink changes. Press **Esc** or click **Done** to return to typing.
@@ -29,7 +30,7 @@ In Inkpad, open the gear menu and turn on **Show Edit in Inkpad in File Explorer
 
 - **Ctrl+S** saves the current tab. **Ctrl+Shift+S** opens Save As.
 - Use `.txt` for plain text and checkboxes. Checkboxes are stored as `☐` and `☑`, so the checked state is visible in other text editors.
-- Use `.inknote` to keep formatting, tables, hyperlinks, and drawings together. When you add those features to an existing text file, Inkpad prompts you to save the complete note as `.inknote`.
+- Use `.inknote` to keep checkbox colors, formatting, tables, hyperlinks, and drawings together. When you add those features to an existing text file, Inkpad prompts you to save the complete note as `.inknote`.
 - Use **File → Export text only** to write a plain-text copy of a formatted note. The export keeps the text and checkbox characters.
 
 ## Build from source

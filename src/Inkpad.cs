@@ -19,7 +19,7 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyTitle("Inkpad")]
 [assembly: System.Reflection.AssemblyDescription("Offline text and drawing editor for Windows")]
 [assembly: System.Reflection.AssemblyProduct("Inkpad")]
-[assembly: System.Reflection.AssemblyVersion("1.4.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.5.0.0")]
 
 sealed partial class Inkpad : Window
 {
@@ -254,8 +254,7 @@ sealed partial class Inkpad : Window
         AddItem(lists, "Numbered list", "", delegate { Format(EditingCommands.ToggleNumbering); });
         AddItem(lists, "Checklist", "Ctrl+Shift+L", StartChecklist);
         AttachMenu(bullets, lists);
-        var checkbox = ActionButton(Symbol("M 4,2.5 H 12 Q 13.5,2.5 13.5,4 V 12 Q 13.5,13.5 12,13.5 H 4 Q 2.5,13.5 2.5,12 V 4 Q 2.5,2.5 4,2.5 Z M 5,8 L 7.2,10.2 L 11,6.2", 19),
-            "Insert checkbox (Ctrl+Shift+Space)", 36, InsertCheckbox);
+        var checkbox = BuildCheckboxToolbar();
         boldButton = ActionButton(new TextBlock { Text = "B", FontWeight = FontWeights.Bold, FontSize = 19 }, "Bold (Ctrl+B)", 40, delegate { Format(EditingCommands.ToggleBold); });
         italicButton = ActionButton(new TextBlock { Text = "I", FontFamily = new FontFamily("Georgia"), FontStyle = FontStyles.Italic, FontSize = 20 }, "Italic (Ctrl+I)", 40, delegate { Format(EditingCommands.ToggleItalic); });
         strikeButton = ActionButton(Symbol("M 12,3 C 9,0 3,2 4,5 C 4.5,7 7,7.5 9,8 M 5,8 C 8,8 12,8.5 12,11 C 12,15 5,16 3,12 M 1,8 H 15", 17), "Strikethrough", 40, ToggleStrike);
@@ -263,7 +262,7 @@ sealed partial class Inkpad : Window
         var table = ActionButton(WithChevron(Symbol("M 4,2 H 12 Q 14,2 14,4 V 12 Q 14,14 12,14 H 4 Q 2,14 2,12 V 4 Q 2,2 4,2 Z M 2,8 H 14 M 8,2 V 14", 19)), "Table", 56, null);
         BuildTableMenu(table);
         var clear = ActionButton(Symbol("M 1,11 L 4,3 L 7,11 M 2,8 H 6 M 10,4 V 6 M 8,5 Q 10,3 12,5 M 7,12 L 11,8 L 15,12 L 12,15 H 10 Z M 9,10 L 13,14", 20), "Clear formatting", 38, ClearFormatting);
-        foreach (var button in new[] { headings, bullets, checkbox, boldButton, italicButton, strikeButton, link, table, clear }) formatting.Children.Add(button);
+        foreach (var control in new UIElement[] { headings, bullets, checkbox, boldButton, italicButton, strikeButton, link, table, clear }) formatting.Children.Add(control);
 
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
         row.Children.Add(actions);
@@ -940,10 +939,10 @@ sealed partial class Inkpad : Window
 
     static Viewbox Pencil() { return Symbol("M 2,14 L 3,10 L 11,2 Q 12,1 13,2 L 14,3 Q 15,4 14,5 L 6,13 Z M 9.5,3.5 L 12.5,6.5 M 3,10 L 6,13", 17); }
 
-    static Viewbox Symbol(string geometry, double size, Brush fill = null)
+    static Viewbox Symbol(string geometry, double size, Brush fill = null, Brush stroke = null)
     {
         var grid = new Grid { Width = 16, Height = 16 };
-        grid.Children.Add(new System.Windows.Shapes.Path { Data = Geometry.Parse(geometry), Fill = fill, Stroke = fill ?? Text, StrokeThickness = 1.25, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round });
+        grid.Children.Add(new System.Windows.Shapes.Path { Data = Geometry.Parse(geometry), Fill = fill, Stroke = stroke ?? fill ?? Text, StrokeThickness = 1.25, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round });
         return new Viewbox { Width = size, Height = size, Child = grid, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
     }
 

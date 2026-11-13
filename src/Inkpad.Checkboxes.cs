@@ -1,15 +1,118 @@
 using System;
+using System.Collections.Generic;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media;
 
 sealed partial class Inkpad
 {
     internal const string EmptyCheckbox = "\u2610";
     internal const string CheckedCheckbox = "\u2611";
-    const string ChecklistPrefix = EmptyCheckbox + " ";
+    const string CheckboxIcon = "M 4,2.5 H 12 Q 13.5,2.5 13.5,4 V 12 Q 13.5,13.5 12,13.5 H 4 Q 2.5,13.5 2.5,12 V 4 Q 2.5,2.5 4,2.5 Z M 5,8 L 7.2,10.2 L 11,6.2";
+    SolidColorBrush checkboxBrush;
+    Button checkboxInsertButton;
+    Border checkboxSwatch;
+
+    StackPanel BuildCheckboxToolbar()
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        checkboxInsertButton = ActionButton(Symbol(CheckboxIcon, 19), "Insert checkbox (Ctrl+Shift+Space)", 31, InsertCheckbox);
+        checkboxSwatch = new Border { Width = 11, Height = 11, Background = Text, CornerRadius = new CornerRadius(2),
+            BorderThickness = new Thickness(1), BorderBrush = Brush("#25000000"), VerticalAlignment = VerticalAlignment.Center };
+        var picker = ActionButton(WithChevron(checkboxSwatch), "Checkbox color", 34, null);
+        var menu = new ContextMenu();
+        var colors = new[] { "Default", "Blue", "Green", "Red", "Orange", "Purple" };
+        var values = new[] { null, "#175CB8", "#08795D", "#BF293D", "#B35413", "#783FA1" };
+        for (int index = 0; index < colors.Length; index++)
+        {
+            var choice = values[index] == null ? null : (SolidColorBrush)Brush(values[index]);
+            var item = AddItem(menu, colors[index], "", delegate { SetCheckboxColor(choice); });
+            item.Icon = new Border { Width = 12, Height = 12, CornerRadius = new CornerRadius(2), Background = choice ?? Text };
+            item.IsCheckable = true;
+            menu.Opened += delegate { item.IsChecked = choice == null ? checkboxBrush == null : checkboxBrush != null && checkboxBrush.Color == choice.Color; };
+        }
+        menu.Items.Add(new Separator());
+        AddItem(menu, "More colors…", "", delegate { Dispatcher.BeginInvoke(new Action(PickCustomCheckboxColor)); });
+        AttachMenu(picker, menu);
+        panel.Children.Add(checkboxInsertButton);
+        panel.Children.Add(picker);
+        return panel;
+    }
+
+    void PickCustomCheckboxColor()
+    {
+        var color = (checkboxBrush ?? (SolidColorBrush)Text).Color;
+        using (var dialog = new System.Windows.Forms.ColorDialog { FullOpen = true, AnyColor = true,
+            Color = System.Drawing.Color.FromArgb(color.R, color.G, color.B) })
+        {
+            var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+            if (dialog.ShowDialog(new ColorDialogOwner(handle)) != System.Windows.Forms.DialogResult.OK) return;
+            SetCheckboxColor(new SolidColorBrush(Color.FromRgb(dialog.Color.R, dialog.Color.G, dialog.Color.B)));
+        }
+    }
+
+    void SetCheckboxColor(SolidColorBrush brush)
+    {
+        checkboxBrush = brush;
+        checkboxSwatch.Background = brush ?? Text;
+        checkboxInsertButton.Content = Symbol(CheckboxIcon, 19, stroke: brush);
+        if (drawing) SetDrawing(false);
+        if (RecolorCheckboxes(current, brush ?? Brushes.Black)) MarkDirty(current);
+        current.TextBox.Focus();
+    }
+
+    internal static bool RecolorCheckboxes(Note note, SolidColorBrush brush)
+    {
+        var editor = note.TextBox;
+        var selection = editor.Selection;
+        var targets = new List<TextRange>();
+        if (selection.IsEmpty)
+        {
+            var adjacent = AdjacentCheckbox(editor.CaretPosition, LogicalDirection.Forward) ??
+                AdjacentCheckbox(editor.CaretPosition, LogicalDirection.Backward);
+            if (adjacent != null) targets.Add(adjacent);
+        }
+        else
+        {
+            for (var at = selection.Start; at != null && at.CompareTo(selection.End) < 0;
+                at = at.GetNextContextPosition(LogicalDirection.Forward))
+            {
+                string run = at.GetTextInRun(LogicalDirection.Forward);
+                if (run.Length == 0) continue;
+                int limit = Math.Min(run.Length, at.GetOffsetToPosition(selection.End));
+                for (int i = 0; i < limit; i++)
+                {
+                    if (run[i] == EmptyCheckbox[0] || run[i] == CheckedCheckbox[0])
+                        targets.Add(new TextRange(at.GetPositionAtOffset(i), at.GetPositionAtOffset(i + 1)));
+                }
+            }
+        }
+        if (targets.Count == 0) return false;
+        bool changed = false;
+        editor.BeginChange();
+        try
+        {
+            foreach (var target in targets)
+            {
+                var old = target.GetPropertyValue(TextElement.ForegroundProperty) as SolidColorBrush;
+                if (old != null && old.Color == brush.Color) continue;
+                note.Formatted = true;
+                target.ApplyPropertyValue(TextElement.ForegroundProperty, brush);
+                changed = true;
+            }
+        }
+        finally { editor.EndChange(); }
+        return changed;
+    }
+
+    sealed class ColorDialogOwner : System.Windows.Forms.IWin32Window
+    {
+        public IntPtr Handle { get; private set; }
+        internal ColorDialogOwner(IntPtr handle) { Handle = handle; }
+    }
 
     void InsertCheckbox()
     {
@@ -27,8 +130,7 @@ sealed partial class Inkpad
         string after = new TextRange(insertion, paragraph.ContentEnd).Text;
         bool spaceBefore = before.Length > 0 && !char.IsWhiteSpace(before[before.Length - 1]);
         bool spaceAfter = after.Length == 0 || !char.IsWhiteSpace(after[0]);
-        editor.Selection.Text = (spaceBefore ? " " : "") + EmptyCheckbox + (spaceAfter ? " " : "");
-        editor.Selection.Select(editor.Selection.End, editor.Selection.End);
+        WriteCheckbox(note, spaceBefore ? " " : "", spaceAfter ? " " : "", checkboxBrush);
     }
 
     void StartChecklist()
@@ -51,8 +153,7 @@ sealed partial class Inkpad
         UseCheckboxEncoding(current);
         var insertion = AfterIndentation(paragraph, indentation);
         editor.Selection.Select(insertion, insertion);
-        editor.Selection.Text = ChecklistPrefix;
-        editor.Selection.Select(editor.Selection.End, editor.Selection.End);
+        WriteCheckbox(current, "", " ", checkboxBrush);
     }
 
     internal static bool ContinueChecklist(Note note)
@@ -79,13 +180,39 @@ sealed partial class Inkpad
                 return true;
             }
 
+            var color = marker.GetPropertyValue(TextElement.ForegroundProperty) as SolidColorBrush;
+            if (color != null && (color.Color == Colors.Black || color.Color == ((SolidColorBrush)Text).Color)) color = null;
             if (!selection.IsEmpty) selection.Text = "";
             var next = editor.CaretPosition.InsertParagraphBreak();
             editor.Selection.Select(next, next);
             UseCheckboxEncoding(note);
-            editor.Selection.Text = line.Substring(0, indentation) + ChecklistPrefix;
-            editor.Selection.Select(editor.Selection.End, editor.Selection.End);
+            WriteCheckbox(note, line.Substring(0, indentation), " ", color);
             return true;
+        }
+        finally { editor.EndChange(); }
+    }
+
+    static void WriteCheckbox(Note note, string before, string after, SolidColorBrush color)
+    {
+        var editor = note.TextBox;
+        var selection = editor.Selection;
+        editor.BeginChange();
+        try
+        {
+            selection.Text = before + EmptyCheckbox + after;
+            var caret = selection.End;
+            if (color != null)
+            {
+                var edge = caret;
+                for (int index = 0; index < after.Length; index++) edge = edge.GetNextInsertionPosition(LogicalDirection.Backward);
+                var marker = AdjacentCheckbox(edge, LogicalDirection.Backward);
+                if (marker != null)
+                {
+                    note.Formatted = true;
+                    marker.ApplyPropertyValue(TextElement.ForegroundProperty, color);
+                }
+            }
+            selection.Select(caret, caret);
         }
         finally { editor.EndChange(); }
     }
@@ -178,7 +305,15 @@ sealed partial class Inkpad
     internal static void ToggleCheckbox(Note note, TextRange checkbox)
     {
         UseCheckboxEncoding(note);
-        checkbox.Text = checkbox.Text == CheckedCheckbox ? EmptyCheckbox : CheckedCheckbox;
+        var editor = note.TextBox;
+        var color = checkbox.GetPropertyValue(TextElement.ForegroundProperty) as SolidColorBrush;
+        editor.BeginChange();
+        try
+        {
+            checkbox.Text = checkbox.Text == CheckedCheckbox ? EmptyCheckbox : CheckedCheckbox;
+            if (color != null) checkbox.ApplyPropertyValue(TextElement.ForegroundProperty, color);
+        }
+        finally { editor.EndChange(); }
     }
 
     static void UseCheckboxEncoding(Note note)
