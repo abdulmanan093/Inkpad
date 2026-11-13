@@ -1,0 +1,10 @@
+*.exe
+*.pdb
+*.lnk
+*.inknote
+/src/qa/
+.vs/
+bin/
+obj/
+Thumbs.db
+Desktop.ini
