@@ -160,51 +160,124 @@ static class NoteFiles
         note.Path = path;
     }
 
-    internal static void Save(Note note, string path, bool export)
+    internal static void Save(Note note, string path, bool export, Func<string, FileStream> createSibling = null)
     {
         string temporary = Path.Combine(Path.GetDirectoryName(path), ".inkpad-" + Guid.NewGuid().ToString("N") + ".tmp");
+        bool ink = !export && IsInkFile(path);
+        string content = ink ? null : TextForSave(note);
+        FileStream staging;
+        try { staging = createSibling == null ? CreateStagingFile(temporary) : createSibling(temporary); }
+        catch (UnauthorizedAccessException)
+        {
+            if (!File.Exists(path)) throw;
+            SaveExistingFile(path, file => WriteNote(note, file, ink, export, content));
+            if (!export && !ink) note.OriginalText = content;
+            return;
+        }
+
         try
         {
-            using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (staging)
             {
-                if (!export && IsInkFile(path))
-                {
-                    using (var archive = new ZipArchive(file, ZipArchiveMode.Create, true))
-                    {
-                        using (var info = new StreamWriter(archive.CreateEntry("note.info").Open(), new UTF8Encoding(false)))
-                        {
-                            info.Write("Inkpad 1\n" + note.PaperWidth.ToString("R", CultureInfo.InvariantCulture) + "\n" +
-                                (note.Formatted ? "1" : "0"));
-                        }
-                        using (var text = new MemoryStream())
-                        {
-                            note.Range.Save(text, DataFormats.Rtf);
-                            text.Position = 0;
-                            using (var entry = archive.CreateEntry("text.rtf").Open()) text.CopyTo(entry);
-                        }
-                        using (var ink = new MemoryStream())
-                        {
-                            note.Ink.Strokes.Save(ink);
-                            ink.Position = 0;
-                            using (var entry = archive.CreateEntry("ink.isf").Open()) ink.CopyTo(entry);
-                        }
-                    }
-                }
-                else
-                {
-                    string content = TextForSave(note);
-                    var encoding = export ? new UTF8Encoding(false, true) : note.Encoding;
-                    using (var writer = new StreamWriter(file, encoding, 4096, true)) writer.Write(content);
-                }
-                file.Flush(true);
+                WriteNote(note, staging, ink, export, content);
+                staging.Flush(true);
             }
-            if (File.Exists(path)) File.Replace(temporary, path, null);
+            if (File.Exists(path))
+            {
+                try { File.Replace(temporary, path, null); }
+                catch (UnauthorizedAccessException) { SaveExistingFile(path, file => WriteNote(note, file, ink, export, content)); }
+            }
             else File.Move(temporary, path);
-            if (!export && !IsInkFile(path)) note.OriginalText = TextForSave(note);
+            if (!export && !ink) note.OriginalText = content;
+        }
+        finally { TryDelete(temporary); }
+    }
+
+    static FileStream CreateStagingFile(string path)
+    {
+        return new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+    }
+
+    static void SaveExistingFile(string path, Action<Stream> write)
+    {
+        // Some folders allow editing an existing file without permitting new files alongside it.
+        string temporary = Path.GetTempPath();
+        string stagedPath = Path.Combine(temporary, "inkpad-" + Guid.NewGuid().ToString("N") + ".tmp");
+        string backupPath = Path.Combine(temporary, "inkpad-" + Guid.NewGuid().ToString("N") + ".backup");
+        bool retainBackup = false;
+        try
+        {
+            using (var staged = CreateStagingFile(stagedPath))
+            {
+                write(staged);
+                staged.Flush(true);
+                using (var target = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                using (var backup = CreateStagingFile(backupPath))
+                {
+                    target.CopyTo(backup);
+                    backup.Flush(true);
+                    try { Overwrite(staged, target); }
+                    catch (IOException) { RestoreBackup(backup, target, backupPath, ref retainBackup); throw; }
+                    catch (UnauthorizedAccessException) { RestoreBackup(backup, target, backupPath, ref retainBackup); throw; }
+                }
+            }
         }
         finally
         {
-            if (File.Exists(temporary)) File.Delete(temporary);
+            TryDelete(stagedPath);
+            if (!retainBackup) TryDelete(backupPath);
+        }
+    }
+
+    static void Overwrite(Stream source, FileStream target)
+    {
+        source.Position = target.Position = 0;
+        source.CopyTo(target);
+        target.SetLength(source.Length);
+        target.Flush(true);
+    }
+
+    static void RestoreBackup(Stream backup, FileStream target, string backupPath, ref bool retainBackup)
+    {
+        retainBackup = true;
+        try { Overwrite(backup, target); }
+        catch (IOException error) { throw new IOException("The original file backup is available at " + backupPath, error); }
+        catch (UnauthorizedAccessException error) { throw new IOException("The original file backup is available at " + backupPath, error); }
+        retainBackup = false;
+    }
+
+    static void TryDelete(string path)
+    {
+        try { File.Delete(path); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    static void WriteNote(Note note, Stream file, bool ink, bool export, string content)
+    {
+        if (!ink)
+        {
+            var encoding = export ? new UTF8Encoding(false, true) : note.Encoding;
+            using (var writer = new StreamWriter(file, encoding, 4096, true)) writer.Write(content);
+            return;
+        }
+
+        using (var archive = new ZipArchive(file, ZipArchiveMode.Create, true))
+        {
+            using (var info = new StreamWriter(archive.CreateEntry("note.info").Open(), new UTF8Encoding(false)))
+                info.Write("Inkpad 1\n" + note.PaperWidth.ToString("R", CultureInfo.InvariantCulture) + "\n" + (note.Formatted ? "1" : "0"));
+            using (var text = new MemoryStream())
+            {
+                note.Range.Save(text, DataFormats.Rtf);
+                text.Position = 0;
+                using (var entry = archive.CreateEntry("text.rtf").Open()) text.CopyTo(entry);
+            }
+            using (var strokes = new MemoryStream())
+            {
+                note.Ink.Strokes.Save(strokes);
+                strokes.Position = 0;
+                using (var entry = archive.CreateEntry("ink.isf").Open()) strokes.CopyTo(entry);
+            }
         }
     }
 

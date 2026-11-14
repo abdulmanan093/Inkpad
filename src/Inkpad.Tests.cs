@@ -25,6 +25,7 @@ static class InkpadTests
             Directory.CreateDirectory(directory);
             TestPlainText(directory);
             TestNoteFiles(directory);
+            TestRestrictedFolderSave(directory);
             TestTablesAndLinks(directory);
             TestWindowPlacement(directory);
             TestShapes();
@@ -37,6 +38,46 @@ static class InkpadTests
             Console.Error.WriteLine(error);
             return 1;
         }
+    }
+
+    static void TestRestrictedFolderSave(string directory)
+    {
+        Func<string, FileStream> denySibling = path => { throw new UnauthorizedAccessException("Simulate a folder that forbids sibling files."); };
+        string text = Path.Combine(directory, "restricted.txt");
+        var note = new Note();
+        File.WriteAllText(text, "Longer original content");
+        NoteFiles.Load(note, text);
+        note.SetPlainText("Shorter");
+        NoteFiles.Save(note, text, false, denySibling);
+        Require(File.ReadAllText(text) == "Shorter", "Save over an existing writable text file when the folder denies temporary files");
+
+        note.Encoding = Encoding.GetEncoding(1252, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
+        note.SetPlainText("Cannot encode \u2605");
+        try { NoteFiles.Save(note, text, false, denySibling); throw new Exception("Expected encoding error"); }
+        catch (EncoderFallbackException) { }
+        Require(File.ReadAllText(text) == "Shorter", "Preserve the existing file if serialization fails before restricted-folder save");
+
+        string ink = Path.Combine(directory, "restricted.inknote");
+        note.Formatted = true;
+        note.Ink.Strokes.Add(ExampleStroke());
+        NoteFiles.Save(note, ink, false);
+        note.SetPlainText("Updated ink note");
+        NoteFiles.Save(note, ink, false, denySibling);
+        var reopened = new Note();
+        NoteFiles.Load(reopened, ink);
+        Require(reopened.PlainText == "Updated ink note" && reopened.HasInk, "Save and reopen an existing ink note when the folder denies temporary files");
+
+        using (var held = new FileStream(text, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            note.SetPlainText("Cannot overwrite a locked file");
+            try { NoteFiles.Save(note, text, false, denySibling); throw new Exception("Expected sharing violation"); }
+            catch (IOException) { }
+        }
+        Require(File.ReadAllText(text) == "Shorter", "Keep the original when access to the existing file is denied by a lock");
+        string missing = Path.Combine(directory, "restricted-" + Guid.NewGuid().ToString("N") + ".txt");
+        try { NoteFiles.Save(note, missing, false, denySibling); throw new Exception("Expected denied creation"); }
+        catch (UnauthorizedAccessException) { }
+        Require(!File.Exists(missing), "Report access denial for a new file in a restricted folder");
     }
 
     static void TestPlainText(string directory)
@@ -503,7 +544,7 @@ static class InkpadTests
                 control.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, control));
             }));
             var method = typeof(Inkpad).GetMethod("ShowNoteDialog", Instance);
-            var result = (MessageBoxResult)method.Invoke(first, new object[] { "Save changes?", "Save your changes before closing.", "Save", "Don’t save" });
+            var result = (MessageBoxResult)method.Invoke(first, new object[] { "Save changes?", "Save your changes before closing.", "Save", "Don’t save", true });
             var expected = choice == "Save" ? MessageBoxResult.Yes : choice == "Cancel" ? MessageBoxResult.Cancel : MessageBoxResult.No;
             Require(result == expected, "Handle " + choice + " in the redesigned save dialog");
         }

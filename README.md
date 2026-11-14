@@ -32,6 +32,7 @@ In Inkpad, open the gear menu and turn on **Show Edit in Inkpad in File Explorer
 - Use `.txt` for plain text and checkboxes. Checkboxes are stored as `☐` and `☑`, so the checked state is visible in other text editors.
 - Use `.inknote` to keep checkbox colors, formatting, tables, hyperlinks, and drawings together. When you add those features to an existing text file, Inkpad prompts you to save the complete note as `.inknote`.
 - Use **File → Export text only** to write a plain-text copy of a formatted note. The export keeps the text and checkbox characters.
+- If Windows blocks a save, use **Save as…** in the error prompt and choose a writable folder. The edited note stays open so you can save a copy.
 
 ## Build from source
 

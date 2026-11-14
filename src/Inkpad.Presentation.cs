@@ -119,7 +119,7 @@ sealed partial class Inkpad
         return row;
     }
 
-    MessageBoxResult ShowNoteDialog(string title, string description, string acceptLabel, string discardLabel)
+    MessageBoxResult ShowNoteDialog(string title, string description, string acceptLabel, string discardLabel, bool offerCancel = true)
     {
         var dialog = new Window
         {
@@ -152,7 +152,7 @@ sealed partial class Inkpad
         if (discardLabel != null)
         {
             button(discardLabel, MessageBoxResult.No, false);
-            button("Cancel", MessageBoxResult.Cancel, false);
+            if (offerCancel) button("Cancel", MessageBoxResult.Cancel, false);
         }
         layout.Children.Add(new Border { Child = actions, Background = Brush("#EEEEEE"), BorderBrush = Line, BorderThickness = new Thickness(0, 1, 0, 0), CornerRadius = new CornerRadius(0, 0, 8, 8) });
         dialog.Content = new Border { Child = layout, BorderBrush = Brush("#CBCBCB"), BorderThickness = new Thickness(1), Background = Surface, CornerRadius = new CornerRadius(8) };

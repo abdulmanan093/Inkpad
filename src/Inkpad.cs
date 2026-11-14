@@ -19,7 +19,7 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyTitle("Inkpad")]
 [assembly: System.Reflection.AssemblyDescription("Offline text and drawing editor for Windows")]
 [assembly: System.Reflection.AssemblyProduct("Inkpad")]
-[assembly: System.Reflection.AssemblyVersion("1.6.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.6.1.0")]
 
 sealed partial class Inkpad : Window
 {
@@ -731,6 +731,11 @@ sealed partial class Inkpad : Window
 
     bool Save(Note note, bool askPath)
     {
+        return SaveNote(note, askPath, true);
+    }
+
+    bool SaveNote(Note note, bool askPath, bool offerAnotherFolder)
+    {
         string path = note.Path;
         bool useInk = note.NeedsInkFile || (path != null && NoteFiles.IsInkFile(path));
         if (askPath || path == null || (useInk && !NoteFiles.IsInkFile(path)))
@@ -765,6 +770,18 @@ sealed partial class Inkpad : Window
             UpdateStatus();
             ShowSaveFeedback("Saved", path);
             return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            const string title = "Windows blocked the save";
+            string description = "Inkpad couldn’t write to “" + path + "”. Your edits are still in this tab. You can save a copy in another folder, such as Downloads.";
+            if (!offerAnotherFolder)
+            {
+                ShowNoteDialog(title, description, "Keep editing", null);
+                return false;
+            }
+            var choice = ShowNoteDialog(title, description, "Save as…", "Keep editing", false);
+            return choice == MessageBoxResult.Yes && SaveNote(note, true, false);
         }
         catch (Exception error) { FileError("save", error); return false; }
     }
