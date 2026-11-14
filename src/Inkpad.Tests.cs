@@ -111,6 +111,7 @@ static class InkpadTests
         TestCheckboxes(directory, editor, note, root);
         TestChecklist(directory, editor, note, root);
         TestCheckboxColors(directory, editor, note, root);
+        TestTabIndicators(directory, editor, note, root);
         Require(note.TextBox.ActualHeight > 400 && note.Ink.ActualHeight == note.TextBox.ActualHeight, "Editor and ink layer share a full-height page");
         Require(!note.Ink.IsHitTestVisible, "Typing mode permits text input");
         note.SetPlainText(string.Join("\n", Enumerable.Repeat("A line in a long note", 240)));
@@ -161,6 +162,49 @@ static class InkpadTests
         RenderPreview(directory, editor, note, root, rectangle);
         VerifyWindowReopen(directory);
         application.Shutdown();
+    }
+
+    static void TestTabIndicators(string directory, Inkpad editor, Note note, FrameworkElement root)
+    {
+        var tabs = (Panel)Field(editor, "tabs");
+        note.Path = Path.Combine(directory, "a-long-note-filename.txt");
+        Call(editor, "UpdateTabs");
+        Layout(root);
+        var initialWidth = ((FrameworkElement)tabs.Children[0]).ActualWidth;
+        Require(TabDot(tabs.Children[0]).Visibility == Visibility.Collapsed, "A clean tab has no unsaved dot");
+
+        note.SetPlainText("Unsaved note");
+        Layout(root);
+        var frame = (FrameworkElement)tabs.Children[0];
+        var dot = TabDot(frame);
+        Require(dot.Visibility == Visibility.Visible && Math.Abs(dot.ActualWidth - 7) < 1 && frame.ActualWidth == initialWidth && frame.ActualHeight <= 31,
+            "Show a full unsaved dot on a compact tab with a long filename without changing its width");
+        Require(Descendants(frame).OfType<Button>().Any(button => System.Windows.Automation.AutomationProperties.GetItemStatus(button) == "Unsaved changes"),
+            "Expose unsaved status for assistive technology");
+
+        var next = new Note { Path = Path.Combine(directory, "Readme.txt") };
+        Call(editor, "AddNote", next);
+        Layout(root);
+        Require(TabDot(tabs.Children[0]).Visibility == Visibility.Visible && TabDot(tabs.Children[1]).Visibility == Visibility.Collapsed,
+            "Keep the unsaved dot on the inactive tab only");
+        next.SetPlainText("Another unsaved note");
+        Call(editor, "Save", note, false);
+        Layout(root);
+        Require(TabDot(tabs.Children[0]).Visibility == Visibility.Collapsed && TabDot(tabs.Children[1]).Visibility == Visibility.Visible,
+            "Clear the dot only on the note that was saved");
+        Call(editor, "Save", next, false);
+        Call(editor, "CloseNote", next);
+        note.SetPlainText("");
+        note.Path = null;
+        note.Dirty = false;
+        Call(editor, "UpdateTabs");
+        Call(editor, "UpdateStatus");
+        Layout(root);
+    }
+
+    static System.Windows.Shapes.Ellipse TabDot(DependencyObject tab)
+    {
+        return Descendants(tab).OfType<System.Windows.Shapes.Ellipse>().Single();
     }
 
     static void TestCheckboxColors(string directory, Inkpad editor, Note note, FrameworkElement root)

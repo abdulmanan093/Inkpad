@@ -19,7 +19,7 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyTitle("Inkpad")]
 [assembly: System.Reflection.AssemblyDescription("Offline text and drawing editor for Windows")]
 [assembly: System.Reflection.AssemblyProduct("Inkpad")]
-[assembly: System.Reflection.AssemblyVersion("1.5.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.6.0.0")]
 
 sealed partial class Inkpad : Window
 {
@@ -150,7 +150,7 @@ sealed partial class Inkpad : Window
 
     void BuildTitleBar()
     {
-        var row = new DockPanel { Background = Chrome, Height = 39, LastChildFill = true };
+        var row = new DockPanel { Background = Chrome, Height = 34, LastChildFill = true };
         Place(row, Dock.Top);
         row.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs args)
         {
@@ -173,18 +173,19 @@ sealed partial class Inkpad : Window
         };
         foreach (var button in new[] { minimize, maximize, close })
         {
-            button.Height = 31;
+            button.Height = 28;
             controls.Children.Add(button);
         }
         var logo = AppMark();
         logo.Margin = new Thickness(13, 0, 5, 0);
         DockPanel.SetDock(logo, Dock.Left);
         row.Children.Add(logo);
-        var tabStrip = new DockPanel { Margin = new Thickness(0, 5, 5, 0), VerticalAlignment = VerticalAlignment.Bottom, HorizontalAlignment = HorizontalAlignment.Left, Height = 34 };
+        var tabStrip = new DockPanel { Margin = new Thickness(0, 4, 5, 0), VerticalAlignment = VerticalAlignment.Bottom, HorizontalAlignment = HorizontalAlignment.Left, Height = 30 };
         row.Children.Add(tabStrip);
         var back = ActionButton(Symbol("M 10,3 L 5,8 L 10,13 Z", 11, Muted), "Scroll tabs left", 29, delegate { tabScroll.ScrollToHorizontalOffset(tabScroll.HorizontalOffset - 140); });
         var forward = ActionButton(Symbol("M 6,3 L 11,8 L 6,13 Z", 11, Muted), "Scroll tabs right", 29, delegate { tabScroll.ScrollToHorizontalOffset(tabScroll.HorizontalOffset + 140); });
         var add = ActionButton(Symbol("M 3,8 H 13 M 8,3 V 13", 15), "New tab (Ctrl+N)", 34, delegate { AddNote(new Note()); });
+        back.Height = forward.Height = add.Height = 27;
         DockPanel.SetDock(back, Dock.Left);
         DockPanel.SetDock(forward, Dock.Right);
         DockPanel.SetDock(add, Dock.Right);
@@ -203,7 +204,7 @@ sealed partial class Inkpad : Window
 
     void BuildToolbar()
     {
-        var row = new Grid { Background = Surface, Height = 35 };
+        var row = new Grid { Background = Surface, Height = 33 };
         Place(Rule(row, Surface), Dock.Top);
         var menu = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(7, 0, 0, 0) };
         var file = new ContextMenu();
@@ -437,33 +438,47 @@ sealed partial class Inkpad : Window
         Border selected = null;
         foreach (var note in notes)
         {
+            bool active = note == current;
             var tab = new DockPanel { LastChildFill = true };
+            var end = new Grid { Width = 24, Height = 24, Margin = new Thickness(0, 0, 3, 0), VerticalAlignment = VerticalAlignment.Center, Background = Brushes.Transparent };
+            DockPanel.SetDock(end, Dock.Right);
+            tab.Children.Add(end);
             var close = ActionButton(null, "Close " + note.Name, 24, delegate { CloseNote(note); });
             close.Style = InkpadStyle.TabCloseButton;
             close.Height = 24;
-            close.Margin = new Thickness(0, 0, 4, 0);
-            DockPanel.SetDock(close, Dock.Right);
-            tab.Children.Add(close);
-            var caption = Label(note.Name + (note.Dirty ? "  •" : ""), 14, note == current ? Text : Muted);
-            caption.Margin = new Thickness(12, 0, 2, 0);
+            end.Children.Add(close);
+            var dot = new System.Windows.Shapes.Ellipse { Width = 7, Height = 7, Fill = Brush("#818181"),
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
+            end.Children.Add(dot);
+            var caption = Label(note.Name, 13, active ? Text : Muted);
+            if (active) caption.FontWeight = FontWeights.SemiBold;
+            caption.Margin = new Thickness(9, 0, 1, 0);
             var switchTab = ActionButton(caption, note.Path ?? "Untitled note", double.NaN, delegate { ShowNote(note); });
+            AutomationProperties.SetName(switchTab, note.Name);
+            AutomationProperties.SetItemStatus(switchTab, note.Dirty ? "Unsaved changes" : "");
             switchTab.HorizontalContentAlignment = HorizontalAlignment.Left;
-            switchTab.Height = 32;
+            switchTab.Height = 28;
             tab.Children.Add(switchTab);
             caption.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            var frame = new Border { Width = Math.Max(80, Math.Min(129, Math.Ceiling(caption.DesiredSize.Width) + 33)), Child = tab, Background = note == current ? Surface : Chrome,
-                BorderBrush = note == current ? Brush("#D8D8D8") : Chrome, BorderThickness = new Thickness(1, 1, 1, 0), CornerRadius = new CornerRadius(9, 9, 0, 0) };
-            if (note != current)
+            var frame = new Border { Width = Math.Max(76, Math.Min(120, Math.Ceiling(caption.DesiredSize.Width) + 34)), Child = tab, Background = active ? Surface : Chrome,
+                BorderBrush = active ? Brush("#D8D8D8") : Chrome, BorderThickness = new Thickness(1, 1, 1, 0), CornerRadius = new CornerRadius(8, 8, 0, 0) };
+            Action updateEnd = delegate
             {
-                close.Opacity = 0;
-                frame.MouseEnter += delegate { close.Opacity = 1; frame.Background = Brush("#EEEEEE"); };
-                frame.MouseLeave += delegate { if (!close.IsKeyboardFocused) close.Opacity = 0; frame.Background = Chrome; };
-                close.GotKeyboardFocus += delegate { close.Opacity = 1; };
-                close.LostKeyboardFocus += delegate { if (!frame.IsMouseOver) close.Opacity = 0; };
-            }
+                bool showClose = (active && !note.Dirty) || end.IsMouseOver || close.IsKeyboardFocused || (!note.Dirty && frame.IsMouseOver);
+                close.Opacity = showClose ? 1 : 0;
+                close.IsHitTestVisible = showClose;
+                dot.Visibility = note.Dirty && !showClose ? Visibility.Visible : Visibility.Collapsed;
+                if (!active) frame.Background = frame.IsMouseOver ? Brush("#EEEEEE") : Chrome;
+            };
+            frame.MouseEnter += delegate { updateEnd(); };
+            frame.MouseLeave += delegate { updateEnd(); };
+            end.MouseEnter += delegate { updateEnd(); };
+            end.MouseLeave += delegate { updateEnd(); };
+            close.IsKeyboardFocusedChanged += delegate { updateEnd(); };
+            updateEnd();
             tab.MouseDown += delegate(object sender, MouseButtonEventArgs args) { if (args.ChangedButton == MouseButton.Middle) CloseNote(note); };
             tabs.Children.Add(frame);
-            if (note == current) selected = frame;
+            if (active) selected = frame;
         }
         if (selected != null) selected.BringIntoView();
         Title = current == null ? "Inkpad" : current.Name + (current.Dirty ? " •" : "") + " - Inkpad";
