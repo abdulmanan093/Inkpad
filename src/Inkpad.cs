@@ -19,7 +19,7 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyTitle("Inkpad")]
 [assembly: System.Reflection.AssemblyDescription("Offline text and drawing editor for Windows")]
 [assembly: System.Reflection.AssemblyProduct("Inkpad")]
-[assembly: System.Reflection.AssemblyVersion("1.9.1.0")]
+[assembly: System.Reflection.AssemblyVersion("1.10.0.0")]
 
 sealed partial class Inkpad : Window
 {
@@ -122,7 +122,7 @@ sealed partial class Inkpad : Window
         BuildImageBar();
         BuildFindBar();
         BuildStatusBar();
-        shapeLayer.Committed += delegate(Stroke stroke) { current.Ink.Strokes.Add(stroke); };
+        shapeLayer.Committed += CommitShape;
         shell.Children.Add(pageScroll);
         pageScroll.SizeChanged += delegate { ResizePage(); };
         pageScroll.ScrollChanged += delegate(object sender, ScrollChangedEventArgs args)
@@ -375,13 +375,11 @@ sealed partial class Inkpad : Window
         ApplyEditorPreferences(note);
         AddMediaEditing(note);
         AddEditorMenu(note);
-        note.PreviousInk = note.Ink.Strokes.ToArray();
+        note.History.Start();
+        foreach (var item in note.Images) TrackPageImage(note, item);
         note.Ink.Strokes.StrokesChanged += delegate
         {
-            if (note.ReplayingInk) return;
-            note.UndoInk.Push(note.PreviousInk);
-            note.RedoInk.Clear();
-            note.PreviousInk = note.Ink.Strokes.ToArray();
+            if (note.History.Replaying) return;
             if (note == current) ResizePage();
             MarkDirty(note);
         };
@@ -406,6 +404,7 @@ sealed partial class Inkpad : Window
             current.ScrollY = pageScroll.VerticalOffset;
             CloseInkPicker();
             SelectImage(null, null);
+            imageLayer.Children.Clear();
             page.Children.Clear();
         }
         current = note;
@@ -415,6 +414,8 @@ sealed partial class Inkpad : Window
         page = new Grid { HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, LayoutTransform = pageScale, Background = Paper };
         page.Children.Add(note.TextBox);
         page.Children.Add(note.Ink);
+        page.Children.Add(imageLayer);
+        foreach (var item in note.Images) imageLayer.Children.Add(item.View);
         page.Children.Add(shapeLayer);
         page.Children.Add(imageOverlay);
         page.LayoutUpdated += delegate { if (imageNote == current) PositionImageOverlay(); };
@@ -497,16 +498,24 @@ sealed partial class Inkpad : Window
                 width = Math.Max(width, Math.Min(50000, Math.Ceiling(layout.WidthIncludingTrailingWhitespace) + 48));
             }
         }
-        page.Width = width;
+        current.TextBox.Width = width;
+        current.TextBox.HorizontalAlignment = HorizontalAlignment.Left;
+        page.Width = current.Images.Count == 0 ? width : Math.Max(width, current.Images.Max(item => item.Bounds.Right) + 10);
         double height = pageScroll.ViewportHeight > 0 && !double.IsInfinity(pageScroll.ViewportHeight) ? pageScroll.ViewportHeight / scale : 0;
         Rect ink = current.Ink.Strokes.GetBounds();
-        page.MinHeight = Math.Max(Math.Floor(height), ink.IsEmpty ? 0 : ink.Bottom + 20);
+        double imageBottom = current.Images.Count == 0 ? 0 : current.Images.Max(item => item.Bounds.Bottom) + 20;
+        page.MinHeight = Math.Max(imageBottom, Math.Max(Math.Floor(height), ink.IsEmpty ? 0 : ink.Bottom + 20));
     }
 
     void SetDrawing(bool enabled)
     {
         if (!enabled) CloseInkPicker();
-        if (enabled) SelectImage(null, null);
+        if (enabled)
+        {
+            if (markdownPreview != null) SetMarkdownPreview(false);
+            ConvertLegacyImagesForDrawing();
+            SelectImage(null, null);
+        }
         drawing = enabled;
         UpdateImageBar();
         if (enabled)
@@ -536,6 +545,7 @@ sealed partial class Inkpad : Window
         ink.EditingModeInverted = inkInput ? InkCanvasEditingMode.EraseByStroke : InkCanvasEditingMode.None;
         ink.IsHitTestVisible = inkInput;
         ink.Cursor = erasing ? Cursors.Cross : Cursors.Pen;
+        foreach (var item in current.Images) ConfigureImageInk(item);
         UpdateInkToolButtons(shaping);
         drawingBar.Visibility = drawing ? Visibility.Visible : Visibility.Collapsed;
         drawButton.Background = drawing ? PaleBlue : Brushes.Transparent;
@@ -548,27 +558,12 @@ sealed partial class Inkpad : Window
 
     void Undo(bool redo)
     {
-        if (!drawing || TextHighlightActive)
-        {
-            if (redo) current.TextBox.Redo();
-            else current.TextBox.Undo();
-            current.TextBox.Focus();
-            return;
-        }
-        var from = redo ? current.RedoInk : current.UndoInk;
-        var to = redo ? current.UndoInk : current.RedoInk;
-        if (from.Count == 0) return;
-        to.Push(current.PreviousInk);
-        current.PreviousInk = from.Pop();
-        current.ReplayingInk = true;
-        try
-        {
-            current.Ink.Strokes.Clear();
-            foreach (Stroke stroke in current.PreviousInk) current.Ink.Strokes.Add(stroke);
-        }
-        finally { current.ReplayingInk = false; }
+        if (!current.History.CanReplay(redo)) return;
+        SelectImage(null, null);
+        if (!current.History.Replay(redo)) return;
         ResizePage();
         MarkDirty(current);
+        FocusDrawingTool();
     }
 
     void MarkDirty(Note note)
@@ -591,6 +586,9 @@ sealed partial class Inkpad : Window
         italicButton.Background = Equals(selection.GetPropertyValue(TextElement.FontStyleProperty), FontStyles.Italic) ? PaleBlue : Brushes.Transparent;
         var decoration = selection.GetPropertyValue(Inline.TextDecorationsProperty) as TextDecorationCollection;
         strikeButton.Background = decoration != null && decoration.Any(item => item.Location == TextDecorationLocation.Strikethrough) ? PaleBlue : Brushes.Transparent;
+        bool highlighted = HasTextHighlight(selection);
+        textHighlightButton.Background = highlighted ? PaleBlue : Brushes.Transparent;
+        AutomationProperties.SetItemStatus(textHighlightButton, highlighted ? "On" : "Off");
         UpdateStatus();
     }
 
@@ -607,8 +605,8 @@ sealed partial class Inkpad : Window
         bool inkFile = current.NeedsInkFile || (current.Path != null && NoteFiles.IsInkFile(current.Path));
         lineEnding.Text = inkFile ? "Inkpad note" : current.Newline == "\n" ? "Unix (LF)" : current.Newline == "\r" ? "Mac (CR)" : "Windows (CRLF)";
         encodingLabel.Text = inkFile ? "" : current.Encoding.CodePage == 65001 ? "UTF-8" : current.Encoding.WebName.ToUpperInvariant();
-        undoInkButton.IsEnabled = TextHighlightActive ? editor.CanUndo : current.UndoInk.Count > 0;
-        redoInkButton.IsEnabled = TextHighlightActive ? editor.CanRedo : current.RedoInk.Count > 0;
+        undoInkButton.IsEnabled = current.History.CanReplay(false);
+        redoInkButton.IsEnabled = current.History.CanReplay(true);
     }
 
     void Format(RoutedUICommand command)
@@ -849,6 +847,13 @@ sealed partial class Inkpad : Window
         }
         if (args.Key == Key.Escape)
         {
+            if (imageMove != null)
+            {
+                CancelImageMove();
+                if (current.TextBox.IsMouseCaptured) current.TextBox.ReleaseMouseCapture();
+                args.Handled = true;
+                return;
+            }
             if (inkPicker != null)
             {
                 var owner = inkPickerOwner;
@@ -888,8 +893,8 @@ sealed partial class Inkpad : Window
                 case Key.R: if (!Preferences.Writing) return; ApplyWritingTool("Rewrite"); break;
                 case Key.M: if (!Preferences.Writing) return; ApplyWritingTool("Summarize"); break;
                 case Key.Tab: ShowNote(notes[(notes.IndexOf(current) + (shift ? notes.Count - 1 : 1)) % notes.Count]); break;
-                case Key.Z: if (findBox.IsKeyboardFocused || !drawing) return; Undo(shift); break;
-                case Key.Y: if (findBox.IsKeyboardFocused || !drawing) return; Undo(true); break;
+                case Key.Z: if (Keyboard.FocusedElement is TextBox) return; Undo(shift); break;
+                case Key.Y: if (Keyboard.FocusedElement is TextBox) return; Undo(true); break;
                 case Key.B: if (findBox.IsKeyboardFocused) return; Format(EditingCommands.ToggleBold); break;
                 case Key.I: if (findBox.IsKeyboardFocused) return; Format(EditingCommands.ToggleItalic); break;
                 case Key.K: if (findBox.IsKeyboardFocused) return; InsertLink(); break;

@@ -86,8 +86,8 @@ sealed partial class Inkpad
         AddItem(menu, "Font…", "", delegate { OpenSettings(true); });
         menu.Opened += delegate
         {
-            undo.IsEnabled = drawing ? current.UndoInk.Count != 0 : current.TextBox.CanUndo;
-            redo.IsEnabled = drawing ? current.RedoInk.Count != 0 : current.TextBox.CanRedo;
+            undo.IsEnabled = current.History.CanReplay(false);
+            redo.IsEnabled = current.History.CanReplay(true);
             cut.IsEnabled = copy.IsEnabled = delete.IsEnabled = !current.TextBox.Selection.IsEmpty;
         };
         return menu;
@@ -199,7 +199,7 @@ sealed partial class Inkpad
             copy.ColumnWidth = double.PositiveInfinity;
             var paginator = ((IDocumentPaginatorSource)copy).DocumentPaginator;
             paginator.PageSize = new Size(width, height);
-            dialog.PrintDocument(current.HasInk ? new InkNotePaginator(paginator, current, copy.PagePadding) : paginator, current.Name);
+            dialog.PrintDocument(current.HasInk || current.Images.Count != 0 ? new InkNotePaginator(paginator, current, copy.PagePadding) : paginator, current.Name);
         }
         catch (Exception error) { FileError("print", error); }
     }
@@ -385,7 +385,15 @@ sealed partial class Inkpad
         readonly Thickness padding;
         internal InkNotePaginator(DocumentPaginator inner, Note note, Thickness padding) { this.inner = inner; this.note = note; this.padding = padding; }
         public override bool IsPageCountValid { get { return inner.IsPageCountValid; } }
-        public override int PageCount { get { return Math.Max(inner.PageCount, (int)Math.Ceiling(note.Ink.Strokes.GetBounds().Bottom / Math.Max(1, PageSize.Height - padding.Top - padding.Bottom))); } }
+        public override int PageCount
+        {
+            get
+            {
+                double bottom = note.Ink.Strokes.GetBounds().Bottom;
+                foreach (var image in note.Images) bottom = Math.Max(bottom, image.Bounds.Bottom);
+                return Math.Max(inner.PageCount, (int)Math.Ceiling(bottom / Math.Max(1, PageSize.Height - padding.Top - padding.Bottom)));
+            }
+        }
         public override Size PageSize { get { return inner.PageSize; } set { inner.PageSize = value; } }
         public override IDocumentPaginatorSource Source { get { return inner.Source; } }
         public override void ComputePageCount() { inner.ComputePageCount(); }
@@ -405,6 +413,7 @@ sealed partial class Inkpad
                 dc.PushClip(new RectangleGeometry(new Rect(padding.Left, padding.Top, Math.Max(1, PageSize.Width - padding.Left - padding.Right), height)));
                 dc.PushTransform(new TranslateTransform(padding.Left, padding.Top - pageNumber * height));
                 note.Ink.Strokes.Draw(dc);
+                foreach (var image in note.Images) image.Draw(dc);
                 dc.Pop(); dc.Pop();
             }
             return new DocumentPage(visual, PageSize, new Rect(PageSize), new Rect(PageSize));

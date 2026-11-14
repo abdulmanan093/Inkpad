@@ -15,6 +15,7 @@ sealed class ShapeLayer : Canvas
     Point start;
     bool active;
     internal ShapeTool Tool;
+    internal Point StartPoint { get { return start; } }
     internal DrawingAttributes Attributes;
     internal event Action<Stroke> Committed;
 

@@ -224,6 +224,7 @@ static class InkpadTests
         TestCheckboxColors(directory, editor, note, root);
         TestTabIndicators(directory, editor, note, root);
         TestSettingsAndEditing(directory, editor, note, root);
+        TestFreeImageAndHistory(directory, editor, root);
         TestInkTools(directory, editor, note, root);
         Require(note.TextBox.ActualHeight > 400 && note.Ink.ActualHeight == note.TextBox.ActualHeight, "Editor and ink layer share a full-height page");
         Require(!note.Ink.IsHitTestVisible, "Typing mode permits text input");
@@ -322,8 +323,9 @@ static class InkpadTests
         var data = new DataObject(DataFormats.Bitmap, bitmap);
         var paste = new DataObjectPastingEventArgs(data, false, DataFormats.Bitmap);
         note.TextBox.RaiseEvent(paste);
-        Require(paste.CommandCancelled && NoteFiles.DocumentImages(note.TextBox.Document.Blocks).Count() == 2,
+        Require(paste.CommandCancelled && note.Images.Count == 1,
             "Paste a bitmap through the editor's clipboard handler");
+        Call(editor, "DeleteActiveImage");
 
         note.SetPlainText("The first paragraph stays above the image.\n" + string.Concat(Enumerable.Repeat("Text wraps around the edge of the image. ", 26)));
         var paragraph = (Paragraph)note.TextBox.Document.Blocks.LastBlock;
@@ -387,12 +389,98 @@ static class InkpadTests
         Layout(root);
     }
 
+    static void TestFreeImageAndHistory(string directory, Inkpad editor, FrameworkElement root)
+    {
+        var previous = (Note)Field(editor, "current");
+        var note = new Note();
+        note.SetPlainText("First paragraph\n" + string.Concat(Enumerable.Repeat("Text flows around the image. ", 25)));
+        Call(editor, "AddNote", note);
+        Layout(root);
+        var bitmap = BitmapSource.Create(150, 80, 96, 96, PixelFormats.Bgra32, null, new byte[150 * 80 * 4], 150 * 4);
+        var plainText = note.PlainText;
+        Call(editor, "InsertPageImage", note, bitmap);
+        Layout(root);
+        var page = (Grid)Field(editor, "page");
+        var item = note.Images.Single();
+        Require(ReferenceEquals(page.Children[1], note.Ink) && page.Children.IndexOf((Canvas)Field(editor, "imageLayer")) > 1,
+            "Place images in front of text and page ink");
+        var from = item.Bounds.TopLeft;
+        var delta = new Vector(287, 256);
+        Call(editor, "StartImageMove", from, from);
+        Call(editor, "MoveImagePreview", from + delta, from + delta);
+        Call(editor, "FinishImageMove");
+        Layout(root);
+        var position = item.View.TranslatePoint(new Point(), page);
+        Require((position - (from + delta)).Length < 2 && note.PlainText == plainText, "Move an image freely without reflowing text");
+        item.Ink.Strokes.Add(ExampleStroke());
+        var annotation = item.Ink.Strokes.GetBounds();
+        Call(editor, "StartImageHandle", item.Bounds.BottomRight);
+        Call(editor, "MoveImageHandle", 4, item.Bounds.BottomRight + new Vector(75, 40));
+        Call(editor, "FinishImageHandle", false);
+        Require(item.Bounds.Width == 225 && item.Ink.Strokes.GetBounds() == annotation, "Resize the image and preserve its image-local ink");
+        Call(editor, "Undo", false);
+        Require(item.Bounds.Width == 150 && item.Ink.Strokes.GetBounds() == annotation, "Undo the resize and keep the annotation");
+        Call(editor, "SelectImage", note, item.Image);
+        Call(editor, "StartImageCrop");
+        Call(editor, "StartImageHandle", item.Bounds.TopLeft);
+        Call(editor, "MoveImageHandle", 0, item.Bounds.TopLeft + new Vector(10, 10));
+        Call(editor, "FinishImageHandle", false);
+        Call(editor, "CommitImageCrop");
+        Require(item.Crop.X == 10 && item.Crop.Width == 140 && item.Ink.Strokes.GetBounds() == annotation,
+            "Crop the picture and its annotations together");
+        Call(editor, "Undo", false);
+        string path = Path.Combine(directory, "free-position.inknote");
+        NoteFiles.Save(note, path, false);
+        var reloaded = new Note();
+        NoteFiles.Load(reloaded, path);
+        Call(editor, "AddNote", reloaded);
+        Layout(root);
+        var restored = reloaded.Images.Single();
+        Require(restored.Bounds == item.Bounds && restored.Ink.Strokes.Count == 1 && !reloaded.HasInk,
+            "Reopen the image at its saved position with its own drawing");
+        Call(editor, "ShowNote", note);
+        note.Ink.Strokes.Add(ExampleStroke());
+        var range = new TextRange(note.TextBox.Document.ContentStart, note.TextBox.Document.ContentEnd);
+        Call(editor, "ApplyTextHighlight", note, range.Start, range.End, Brushes.Gold);
+        Call(editor, "SetDrawing", true);
+        Call(editor, "Undo", false);
+        Require(note.Ink.Strokes.Count == 1 && !Equals(range.GetPropertyValue(TextElement.BackgroundProperty), Brushes.Gold),
+            "Undo text styling while in drawing mode");
+        Call(editor, "SetDrawing", false);
+        Call(editor, "Undo", false);
+        Require(!note.HasInk, "Undo a drawing while in text mode");
+        Call(editor, "Undo", false);
+        Require(item.Ink.Strokes.Count == 0, "Undo a drawing on an image independently of the page");
+        Call(editor, "Undo", false);
+        Require(item.Bounds.TopLeft == from, "Undo image movement and restore its previous position");
+        Call(editor, "Undo", true);
+        Call(editor, "Undo", true);
+        Call(editor, "Undo", true);
+        Call(editor, "Undo", true);
+        Layout(root);
+        Require(note.HasInk && item.Ink.Strokes.GetBounds() == annotation && (item.Bounds.TopLeft - position).Length < 2,
+            "Redo image movement and ink in their original order");
+        Call(editor, "Undo", false);
+        Call(editor, "Undo", false);
+        note.Ink.Strokes.Add(ExampleStroke());
+        Require(!note.History.CanReplay(true), "A new drawing discards redo for both text and ink edits");
+        Call(editor, "SetDrawing", true);
+        Require(item.Ink.EditingMode == InkCanvasEditingMode.Ink && item.Ink.IsHitTestVisible, "Draw on an image through its own ink surface");
+        Call(editor, "SetDrawing", false);
+        Call(editor, "SelectImage", note, item.Image);
+        Call(editor, "DeleteActiveImage");
+        Require(note.Images.Count == 0, "Delete a floating image");
+        Call(editor, "Undo", false);
+        Require(note.Images.Single() == item && item.Ink.Strokes.Count == 1, "Undo image deletion and recover its ink");
+        Call(editor, "ShowNote", previous);
+    }
+
     static void TestHighlightToolbar(Inkpad editor, Note note, FrameworkElement root)
     {
         note.SetPlainText("Selected text\nAnother line");
         Layout(root);
         var toolbar = Descendants(root).OfType<Button>().ToArray();
-        var apply = toolbar.Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Apply text highlight with the current color");
+        var apply = toolbar.Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Toggle text highlight");
         var colors = toolbar.Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Choose text highlight color");
         var indicator = ((Grid)((Viewbox)apply.Content).Child).Children.OfType<Border>().Single();
         var paragraph = (Paragraph)note.TextBox.Document.Blocks.FirstBlock;
@@ -415,12 +503,16 @@ static class InkpadTests
         var first = paragraph.Inlines.OfType<Run>().ToArray();
         Require(first[0].Text == "Selected" && ((SolidColorBrush)first[0].Background).Color == Color.FromArgb(126, color.R, color.G, color.B) &&
             !(first[1].Background is SolidColorBrush), "Apply the chosen color directly to the selected words");
-        var second = (Paragraph)paragraph.NextBlock;
-        note.TextBox.CaretPosition = second.Inlines.FirstInline.ContentStart;
-        Layout(root);
+        Require(System.Windows.Automation.AutomationProperties.GetItemStatus(apply) == "On", "Show the highlighter as active on highlighted text");
         apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, apply));
-        Require(((SolidColorBrush)second.Inlines.FirstInline.Background).Color == ((SolidColorBrush)first[0].Background).Color,
-            "Reuse the color with one click to highlight the current line");
+        var cleared = paragraph.Inlines.OfType<Run>().First().Background as SolidColorBrush;
+        Require(System.Windows.Automation.AutomationProperties.GetItemStatus(apply) == "Off" && (cleared == null || cleared.Color.A == 0),
+            "Click the active highlighter to remove the highlight from the selection");
+        note.TextBox.CaretPosition = ((Paragraph)paragraph.NextBlock).ContentEnd;
+        apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, apply));
+        Require(System.Windows.Automation.AutomationProperties.GetItemStatus(apply) == "On", "Enable highlight at the caret for typing");
+        apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, apply));
+        Require(System.Windows.Automation.AutomationProperties.GetItemStatus(apply) == "Off", "Disable highlight at the caret with a second click");
     }
 
     static void TestInkTools(string directory, Inkpad editor, Note note, FrameworkElement root)
@@ -472,8 +564,6 @@ static class InkpadTests
             "Switching to pencil restores its own thickness and solid stroke");
         note.Ink.Strokes.Clear();
         note.PaperWidth = 0;
-        note.UndoInk.Clear();
-        note.RedoInk.Clear();
         Call(editor, "SetDrawing", false);
         note.SetPlainText("");
         note.Dirty = false;

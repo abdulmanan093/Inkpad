@@ -17,7 +17,7 @@ sealed partial class Inkpad
     readonly Border imageBar = new Border { Visibility = Visibility.Collapsed };
     Note imageNote;
     Image activeImage;
-    Point? imageDragStart;
+    Button textHighlightButton;
 
     void BuildImageBar()
     {
@@ -27,14 +27,6 @@ sealed partial class Inkpad
         var crop = ActionButton(WithIcon(Symbol(CropIcon, 16), "Crop"), "Crop selected image", 70, StartImageCrop);
         row.Children.Add(resize);
         row.Children.Add(crop);
-        var layout = ActionButton(WithChevron(Label("Wrap", 13, Text)), "Image wrap and placement", 83, null);
-        var menu = new ContextMenu();
-        AddItem(menu, "Wrap left", "", delegate { AlignImage(FigureHorizontalAnchor.ContentLeft, WrapDirection.Both); });
-        AddItem(menu, "Wrap center", "", delegate { AlignImage(FigureHorizontalAnchor.ContentCenter, WrapDirection.Both); });
-        AddItem(menu, "Wrap right", "", delegate { AlignImage(FigureHorizontalAnchor.ContentRight, WrapDirection.Both); });
-        AddItem(menu, "Above and below", "", delegate { AlignImage(FigureHorizontalAnchor.ContentCenter, WrapDirection.None); });
-        AttachMenu(layout, menu);
-        row.Children.Add(layout);
         row.Children.Add(ActionButton("Copy", "Copy selected image", 60, delegate { if (activeImage != null) CopyBitmap(activeImage); }));
         row.Children.Add(ActionButton("Delete", "Delete selected image", 66, DeleteActiveImage));
         row.Children.Add(ActionButton("Done", "Finish editing image", 60, delegate { SelectImage(null, null); if (current != null) current.TextBox.Focus(); }));
@@ -49,18 +41,19 @@ sealed partial class Inkpad
     void EditActiveImage(Action<Note, Image, TextElement> edit)
     {
         var container = ImageContainer(activeImage);
-        if (container == null || imageNote != current) return;
+        if (!HasSelectedImage) return;
         edit(imageNote, activeImage, container);
     }
 
     void UpdateImageBar()
     {
-        imageBar.Visibility = !drawing && imageNote == current && ImageContainer(activeImage) != null ? Visibility.Visible : Visibility.Collapsed;
+        imageBar.Visibility = !drawing && HasSelectedImage ? Visibility.Visible : Visibility.Collapsed;
     }
 
     void SelectImage(Note note, Image image)
     {
         if (image != activeImage) StopImageCrop();
+        CancelImageMove();
         imageResize = null;
         activeImage = image;
         imageNote = note;
@@ -85,21 +78,19 @@ sealed partial class Inkpad
             new Rect(image.TranslatePoint(new Point(), editor), image.RenderSize).Contains(point));
     }
 
-    void AlignImage(FigureHorizontalAnchor anchor, WrapDirection wrapDirection)
-    {
-        EditActiveImage(delegate(Note note, Image image, TextElement container)
-        {
-            var replacement = ReplaceBitmap(note, container, (BitmapSource)image.Source, image.Width, anchor, wrapDirection);
-            SelectImage(note, replacement);
-            note.TextBox.Focus();
-        });
-    }
-
     void DeleteActiveImage()
     {
         EditActiveImage(delegate(Note note, Image image, TextElement container)
         {
-            new TextRange(container.ElementStart, container.ElementEnd).Text = "";
+            var item = SelectedPageImage;
+            if (item == null) new TextRange(container.ElementStart, container.ElementEnd).Text = "";
+            else
+            {
+                int index = note.Images.IndexOf(item);
+                RemovePageImage(note, item);
+                note.History.Record(delegate { AddPageImage(note, item, index); }, delegate { RemovePageImage(note, item); });
+                MarkDirty(note);
+            }
             SelectImage(null, null);
             note.TextBox.Focus();
         });
@@ -109,17 +100,36 @@ sealed partial class Inkpad
         var marker = Symbol("M 3,2 H 13 V 5 L 11,8 H 5 L 3,5 Z M 6,8 V 12 L 10,10 V 8", 18);
         ((Grid)marker.Child).Children.Add(new Border { Height = 2.5, Width = 13, CornerRadius = new CornerRadius(1),
             VerticalAlignment = VerticalAlignment.Bottom, Background = markerIndicator });
-        var apply = ActionButton(marker, "Apply text highlight with the current color", 28, delegate
+        textHighlightButton = ActionButton(marker, "Toggle text highlight", 28, delegate
         {
             CloseInkPicker();
-            HighlightText(TextHighlightBrush(markerColor));
+            ToggleTextHighlight();
         });
         var colors = ActionButton(Symbol("M 4,6 L 8,10 L 12,6", 12), "Choose text highlight color", 19, null);
         colors.Click += delegate { OpenInkPicker(colors, true, true); };
         var group = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        group.Children.Add(apply);
+        group.Children.Add(textHighlightButton);
         group.Children.Add(colors);
         return group;
+    }
+
+    static bool HasTextHighlight(TextSelection selection)
+    {
+        var background = selection.GetPropertyValue(TextElement.BackgroundProperty) as SolidColorBrush;
+        return background != null && background.Color.A != 0 && background.Opacity != 0;
+    }
+
+    void ToggleTextHighlight()
+    {
+        if (markdownPreview != null) SetMarkdownPreview(false);
+        if (drawing) SetDrawing(false);
+        var editor = current.TextBox;
+        var selection = editor.Selection;
+        bool enabled = !HasTextHighlight(selection);
+        editor.Focus();
+        if (enabled || !selection.IsEmpty) current.Formatted = true;
+        selection.ApplyPropertyValue(TextElement.BackgroundProperty, enabled ? TextHighlightBrush(markerColor) : Brushes.Transparent);
+        UpdateSelection();
     }
 
     void HighlightText(Brush color)
@@ -152,15 +162,8 @@ sealed partial class Inkpad
 
     Button BuildImageButton()
     {
-        var button = ActionButton(Symbol("M 2,3 H 14 V 13 H 2 Z M 2,11 L 6,7 L 9,10 L 11,8 L 14,11 M 10,5 H 10.3", 18), "Insert image", 32, null);
-        var menu = new ContextMenu();
-        AddItem(menu, "Insert image from file…", "", InsertImageFile);
-        AddItem(menu, "Paste image", "Ctrl+V", delegate
-        {
-            if (!TryPasteBitmap(current)) ShowNoteDialog("Paste image", "Copy an image to the clipboard first.", "OK", null);
-        });
-        AttachMenu(button, menu);
-        return button;
+        return ActionButton(Symbol("M 2,3 H 14 V 13 H 2 Z M 2,11 L 6,7 L 9,10 L 11,8 L 14,11 M 10,5 H 10.3", 18),
+            "Insert image from file", 32, InsertImageFile);
     }
 
     void InsertImageFile()
@@ -172,7 +175,7 @@ sealed partial class Inkpad
             using (var file = File.OpenRead(dialog.FileName))
             {
                 var decoder = BitmapDecoder.Create(file, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
-                InsertBitmap(current, decoder.Frames[0]);
+                InsertPageImage(current, decoder.Frames[0]);
             }
         }
         catch (Exception error) { FileError("insert an image into", error); }
@@ -196,7 +199,7 @@ sealed partial class Inkpad
                 var image = args.SourceDataObject.GetData(DataFormats.Bitmap, true) as BitmapSource;
                 if (image == null) return;
                 args.CancelCommand();
-                InsertBitmap(note, image);
+                InsertPageImage(note, image);
             }
             catch (Exception error) { args.CancelCommand(); FileError("paste an image into", error); }
         });
@@ -217,8 +220,7 @@ sealed partial class Inkpad
             if (args.ChangedButton == MouseButton.Left)
             {
                 SelectImage(note, image);
-                imageDragStart = args.GetPosition(this);
-                editor.CaptureMouse();
+                if (editor.CaptureMouse()) StartImageMove(args.GetPosition(page), args.GetPosition(this));
             }
             else if (args.ChangedButton == MouseButton.Right)
             {
@@ -229,40 +231,31 @@ sealed partial class Inkpad
         editor.PreviewMouseUp += delegate(object sender, MouseButtonEventArgs args)
         {
             if (args.ChangedButton == MouseButton.Left && EndTextHighlight(note, args.GetPosition(editor))) { args.Handled = true; return; }
-            if (args.ChangedButton != MouseButton.Left || !imageDragStart.HasValue) return;
-            var start = imageDragStart.Value;
-            imageDragStart = null;
-            var point = args.GetPosition(editor);
-            var image = imageNote == note ? activeImage : null;
+            if (args.ChangedButton != MouseButton.Left || imageMove == null || note != current) return;
+            MoveImagePreview(args.GetPosition(page), args.GetPosition(this));
+            FinishImageMove();
             if (editor.IsMouseCaptured) editor.ReleaseMouseCapture();
-            if (image == null) return;
-            var movement = args.GetPosition(this) - start;
-            if (Math.Abs(movement.X) > SystemParameters.MinimumHorizontalDragDistance || Math.Abs(movement.Y) > SystemParameters.MinimumVerticalDragDistance)
-            {
-                var target = editor.GetPositionFromPoint(point, true);
-                var anchor = point.X < editor.ActualWidth / 3 ? FigureHorizontalAnchor.ContentLeft :
-                    point.X > editor.ActualWidth * 2 / 3 ? FigureHorizontalAnchor.ContentRight : FigureHorizontalAnchor.ContentCenter;
-                var container = ImageContainer(image);
-                if (target != null && !new TextRange(container.ElementStart, container.ElementEnd).Contains(target))
-                    image = MoveBitmap(note, container, target, (BitmapSource)image.Source, image.Width, anchor);
-            }
-            SelectImage(note, image);
             args.Handled = true;
         };
         editor.PreviewMouseMove += delegate(object sender, MouseEventArgs args)
         {
-            if (highlightAnchor == null) return;
-            DragTextHighlight(note, args.GetPosition(editor));
+            if (highlightAnchor != null) DragTextHighlight(note, args.GetPosition(editor));
+            else if (imageMove != null && note == current && editor.IsMouseCaptured)
+                MoveImagePreview(args.GetPosition(page), args.GetPosition(this));
+            else return;
             args.Handled = true;
         };
-        editor.LostMouseCapture += delegate { imageDragStart = null; highlightAnchor = null; };
+        editor.LostMouseCapture += delegate { if (imageNote == note) CancelImageMove(); highlightAnchor = null; };
         editor.SelectionChanged += delegate { if (imageNote == note) SelectImage(null, null); };
-        editor.TextChanged += delegate { if (imageNote == note) UpdateImageBar(); };
+        editor.TextChanged += delegate
+        {
+            if (imageNote == note && !HasSelectedImage) SelectImage(null, null);
+        };
         editor.PreviewKeyDown += delegate(object sender, KeyEventArgs args)
         {
             if (args.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control && TryPasteBitmap(note))
             { args.Handled = true; return; }
-            if (imageNote == note && ImageContainer(activeImage) != null)
+            if (imageNote == note && HasSelectedImage)
             {
                 if (args.Key == Key.Delete || args.Key == Key.Back) { DeleteActiveImage(); args.Handled = true; return; }
                 if ((args.Key == Key.C || args.Key == Key.X) && Keyboard.Modifiers == ModifierKeys.Control)
@@ -287,7 +280,7 @@ sealed partial class Inkpad
             if (!Clipboard.ContainsImage()) return false;
             var bitmap = Clipboard.GetImage();
             if (bitmap == null) return false;
-            InsertBitmap(note, bitmap);
+            InsertPageImage(note, bitmap);
         }
         catch (Exception error) { FileError("paste an image into", error); }
         return true;
@@ -366,7 +359,12 @@ sealed partial class Inkpad
 
     bool CopyBitmap(Image image)
     {
-        try { Clipboard.SetImage((BitmapSource)image.Source); return true; }
+        try
+        {
+            var item = image.Tag as PageImage;
+            Clipboard.SetImage(item == null ? (BitmapSource)image.Source : item.CopyBitmap());
+            return true;
+        }
         catch (System.Runtime.InteropServices.ExternalException)
         { ShowNoteDialog("Clipboard busy", "Try copying the image again.", "OK", null); return false; }
     }
@@ -374,32 +372,30 @@ sealed partial class Inkpad
     void ResizeBitmap(Note note, Image image, TextElement container)
     {
         double width;
-        string value = AskText("Resize image", "Width in pixels. The aspect ratio stays the same.", Math.Round(image.Width).ToString(CultureInfo.CurrentCulture));
+        var item = image.Tag as PageImage;
+        double previousWidth = item == null ? image.Width : item.Bounds.Width;
+        string value = AskText("Resize image", "Width in pixels. The aspect ratio stays the same.", Math.Round(previousWidth).ToString(CultureInfo.CurrentCulture));
         if (value == null) return;
         if (!double.TryParse(value, out width) || double.IsNaN(width) || width < 12 || width > 10000)
         { ShowNoteDialog("Resize image", "Enter a width from 12 to 10,000 pixels.", "OK", null); return; }
-        SelectImage(note, ReplaceBitmap(note, container, (BitmapSource)image.Source, width));
+        if (item == null) SelectImage(note, ReplaceBitmap(note, container, (BitmapSource)image.Source, width));
+        else ChangePageImage(item, new Rect(item.Bounds.TopLeft, new Size(width, width * item.Bounds.Height / previousWidth)), item.Crop);
     }
 
     internal static Image ReplaceBitmap(Note note, TextElement container, BitmapSource bitmap, double width,
         FigureHorizontalAnchor? alignment = null, WrapDirection? wrapping = null)
     {
         var old = container as Figure;
-        return MoveBitmap(note, container, container.ElementStart, bitmap, width,
-            alignment ?? (old == null ? FigureHorizontalAnchor.ContentLeft : old.HorizontalAnchor),
-            wrapping ?? (old == null ? WrapDirection.Both : old.WrapDirection));
-    }
-
-    static Image MoveBitmap(Note note, TextElement container, TextPointer at, BitmapSource bitmap, double width,
-        FigureHorizontalAnchor alignment, WrapDirection wrapping = WrapDirection.Both)
-    {
+        var at = container.ElementStart;
         var editor = note.TextBox;
         editor.BeginChange();
         try
         {
             new TextRange(container.ElementStart, container.ElementEnd).Text = "";
             var image = NewInlineImage(bitmap, width);
-            var replacement = PlaceBitmap(image, at, alignment, wrapping);
+            var replacement = PlaceBitmap(image, at,
+                alignment ?? (old == null ? FigureHorizontalAnchor.ContentLeft : old.HorizontalAnchor),
+                wrapping ?? (old == null ? WrapDirection.Both : old.WrapDirection));
             editor.CaretPosition = replacement.ElementEnd.GetInsertionPosition(LogicalDirection.Forward);
             return image;
         }

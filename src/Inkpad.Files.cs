@@ -9,15 +9,14 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Ink;
+using System.Windows.Media.Imaging;
 
 sealed class Note
 {
     internal readonly RichTextBox TextBox = new RichTextBox();
     internal readonly InkCanvas Ink = new InkCanvas();
-    internal readonly System.Collections.Generic.Stack<Stroke[]> UndoInk = new System.Collections.Generic.Stack<Stroke[]>();
-    internal readonly System.Collections.Generic.Stack<Stroke[]> RedoInk = new System.Collections.Generic.Stack<Stroke[]>();
-    internal Stroke[] PreviousInk = new Stroke[0];
-    internal bool ReplayingInk;
+    internal readonly NoteHistory History;
+    internal readonly List<PageImage> Images = new List<PageImage>();
     internal bool Dirty;
     internal bool Formatted;
     internal bool Markdown;
@@ -31,10 +30,11 @@ sealed class Note
     internal double ScrollY;
     internal string Name { get { return Path == null ? "Untitled" : System.IO.Path.GetFileName(Path); } }
     internal bool HasInk { get { return Ink.Strokes.Count != 0; } }
-    internal bool NeedsInkFile { get { return HasInk || Formatted; } }
+    internal bool NeedsInkFile { get { return HasInk || Formatted || Images.Count != 0; } }
 
     internal Note()
     {
+        History = new NoteHistory(TextBox, Ink);
         var paragraphStyle = new Style(typeof(Paragraph));
         paragraphStyle.Setters.Add(new Setter(Block.MarginProperty, new Thickness(0)));
         TextBox.Resources.Add(typeof(Paragraph), paragraphStyle);
@@ -163,7 +163,7 @@ static class NoteFiles
                 using (var reader = new StreamReader(Entry(archive, "note.info", 4096)))
                     metadata = reader.ReadToEnd().Split('\n');
                 double width;
-                if (metadata.Length < 3 || metadata[0] != "Inkpad 1" ||
+                if (metadata.Length < 3 || (metadata[0] != "Inkpad 1" && metadata[0] != "Inkpad 2") ||
                     !double.TryParse(metadata[1], NumberStyles.Float, CultureInfo.InvariantCulture, out width) ||
                     double.IsNaN(width) || width < 0 || width > 50000 ||
                     (metadata[2] != "0" && metadata[2] != "1"))
@@ -175,6 +175,7 @@ static class NoteFiles
                 RestoreHighlights(note, archive);
                 RestoreImageLayout(note, archive);
                 RestoreEmbeddedImages(note);
+                if (metadata[0] == "Inkpad 2") RestorePageImages(note, archive);
                 NoteTables.StyleLoaded(note.TextBox.Document);
                 using (var ink = Entry(archive, "ink.isf", 64L * 1024 * 1024))
                 {
@@ -326,7 +327,8 @@ static class NoteFiles
         using (var archive = new ZipArchive(file, ZipArchiveMode.Create, true))
         {
             using (var info = new StreamWriter(archive.CreateEntry("note.info").Open(), new UTF8Encoding(false)))
-                info.Write("Inkpad 1\n" + note.PaperWidth.ToString("R", CultureInfo.InvariantCulture) + "\n" + (note.Formatted ? "1" : "0"));
+                info.Write((note.Images.Count == 0 ? "Inkpad 1\n" : "Inkpad 2\n") +
+                    note.PaperWidth.ToString("R", CultureInfo.InvariantCulture) + "\n" + (note.Formatted ? "1" : "0"));
             var document = note.TextBox.Document;
             if (DocumentImages(document.Blocks).Any(image => image.Parent is BlockUIContainer)) document = PrepareImageLayout(note, archive);
             var range = new TextRange(document.ContentStart, document.ContentEnd);
@@ -337,11 +339,81 @@ static class NoteFiles
                 using (var entry = archive.CreateEntry("text.rtf").Open()) text.CopyTo(entry);
             }
             SaveHighlights(range, archive);
+            SavePageImages(note, archive);
             using (var strokes = new MemoryStream())
             {
                 note.Ink.Strokes.Save(strokes);
                 strokes.Position = 0;
                 using (var entry = archive.CreateEntry("ink.isf").Open()) strokes.CopyTo(entry);
+            }
+        }
+    }
+
+    static void SavePageImages(Note note, ZipArchive archive)
+    {
+        if (note.Images.Count == 0) return;
+        var layout = new StringBuilder();
+        for (int i = 0; i < note.Images.Count; i++)
+        {
+            var item = note.Images[i];
+            var b = item.Bounds;
+            var crop = item.Crop;
+            layout.AppendFormat(CultureInfo.InvariantCulture, "{0:R}\t{1:R}\t{2:R}\t{3:R}\t{4}\t{5}\t{6}\t{7}",
+                b.X, b.Y, b.Width, b.Height, crop.X, crop.Y, crop.Width, crop.Height).AppendLine();
+            string name = "images/" + i.ToString(CultureInfo.InvariantCulture);
+            var png = new PngBitmapEncoder();
+            png.Frames.Add(BitmapFrame.Create(item.Bitmap));
+            using (var buffer = new MemoryStream())
+            {
+                png.Save(buffer);
+                buffer.Position = 0;
+                using (var file = archive.CreateEntry(name + ".png", CompressionLevel.NoCompression).Open()) buffer.CopyTo(file);
+            }
+            if (item.Ink.Strokes.Count != 0)
+                using (var file = archive.CreateEntry(name + ".isf").Open()) item.Ink.Strokes.Save(file);
+        }
+        using (var writer = new StreamWriter(archive.CreateEntry("page-images.tsv").Open(), new UTF8Encoding(false)))
+            writer.Write(layout.ToString());
+    }
+
+    static void RestorePageImages(Note note, ZipArchive archive)
+    {
+        using (var layout = new StreamReader(Entry(archive, "page-images.tsv", 1024 * 1024)))
+        {
+            int index = 0;
+            for (string line = layout.ReadLine(); line != null; line = layout.ReadLine())
+            {
+                var fields = line.Split('\t');
+                var bounds = new double[4];
+                var crop = new int[4];
+                bool valid = fields.Length == 8;
+                for (int i = 0; valid && i < 4; i++)
+                    valid = double.TryParse(fields[i], NumberStyles.Float, CultureInfo.InvariantCulture, out bounds[i]) &&
+                        bounds[i] >= 0 && bounds[i] <= 1000000 &&
+                        int.TryParse(fields[i + 4], NumberStyles.None, CultureInfo.InvariantCulture, out crop[i]);
+                if (!valid || bounds[2] == 0 || bounds[3] == 0 || crop[2] == 0 || crop[3] == 0)
+                    throw new InvalidDataException("An image has an invalid position or size.");
+                string name = "images/" + (index++).ToString(CultureInfo.InvariantCulture);
+                BitmapSource bitmap;
+                using (var data = new MemoryStream())
+                {
+                    using (var input = Entry(archive, name + ".png", 200L * 1024 * 1024)) input.CopyTo(data);
+                    data.Position = 0;
+                    bitmap = new PngBitmapDecoder(data, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0];
+                }
+                if ((long)bitmap.PixelWidth * bitmap.PixelHeight > 40000000 || crop[0] > bitmap.PixelWidth - crop[2] || crop[1] > bitmap.PixelHeight - crop[3])
+                    throw new InvalidDataException("An image has invalid pixel dimensions.");
+                var rect = new Rect(bounds[0], bounds[1], bounds[2], bounds[3]);
+                var item = new PageImage(bitmap, rect);
+                item.Update(rect, new Int32Rect(crop[0], crop[1], crop[2], crop[3]));
+                if (archive.GetEntry(name + ".isf") != null)
+                    using (var data = new MemoryStream())
+                    {
+                        using (var input = Entry(archive, name + ".isf", 64L * 1024 * 1024)) input.CopyTo(data);
+                        data.Position = 0;
+                        item.Ink.Strokes = new StrokeCollection(data);
+                    }
+                note.Images.Add(item);
             }
         }
     }
@@ -398,7 +470,7 @@ static class NoteFiles
                 if (host == null || double.IsNaN(image.Width) || image.Width <= 0) continue;
                 var at = host.ElementStart;
                 host.Child = null;
-                new TextRange(at, host.ElementEnd).Text = "";
+                new TextRange(host.ElementStart, host.ElementEnd).Text = "";
                 Inkpad.PlaceBitmap(image, at, anchor, wrap);
             }
     }
