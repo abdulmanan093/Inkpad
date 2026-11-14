@@ -19,7 +19,7 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyTitle("Inkpad")]
 [assembly: System.Reflection.AssemblyDescription("Offline text and drawing editor for Windows")]
 [assembly: System.Reflection.AssemblyProduct("Inkpad")]
-[assembly: System.Reflection.AssemblyVersion("1.10.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.10.1.0")]
 
 sealed partial class Inkpad : Window
 {
@@ -270,8 +270,19 @@ sealed partial class Inkpad : Window
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
         Grid.SetColumn(actions, 2);
         row.Children.Add(actions);
-        drawButton = ActionButton(WithIcon(Pencil(), "Draw"), "Draw on the note (Ctrl+D)", 71, delegate { SetDrawing(!drawing); });
+        drawButton = ActionButton(WithIcon(Pencil(), "Draw"), "Draw on the note (Ctrl+D)", 71, delegate
+        {
+            if (drawing && erasing)
+            {
+                ActivateInkTool(false);
+                FocusDrawingTool();
+            }
+            else SetDrawing(!drawing);
+        });
         actions.Children.Add(drawButton);
+        eraserButton = ActionButton(Symbol("M 2,9 L 8,3 Q 9,2 10,3 L 14,7 Q 15,8 14,9 L 9,14 H 6 Z M 5,6 L 12,12 M 9,14 H 15", 17),
+            "Eraser", 32, ToggleEraser);
+        actions.Children.Add(eraserButton);
         actions.Children.Add(BuildImageButton());
         actions.Children.Add(ActionButton(Symbol("M 3,2 H 11 L 14,5 V 14 H 2 V 2 H 3 M 5,2 V 6 H 11 V 2 M 5,14 V 9 H 11 V 14", 17), "Save (Ctrl+S)", 35, delegate { Save(current, false); }));
         var writing = ActionButton(WithChevron(Label("✧", 18, Text)), "Writing tools", 43, null);
@@ -293,7 +304,6 @@ sealed partial class Inkpad : Window
         AddInkTool(row, false);
         AddInkTool(row, true);
         row.Children.Add(Divider(7));
-        eraserButton = ActionButton(WithIcon(Symbol("M 2,9 L 8,3 Q 9,2 10,3 L 14,7 Q 15,8 14,9 L 9,14 H 6 Z M 5,6 L 12,12 M 9,14 H 15", 16), "Eraser"), "Erase a stroke", 81, delegate { erasing = true; shape = null; ApplyDrawingMode(); });
         shapesButton = ActionButton(null, "Shapes. Hold Shift while dragging to constrain the shape.", 105, null);
         var shapes = new ContextMenu { MinWidth = 164, Padding = new Thickness(3) };
         foreach (ShapeTool tool in Enum.GetValues(typeof(ShapeTool)))
@@ -305,7 +315,6 @@ sealed partial class Inkpad : Window
             shapes.Opened += delegate { entry.IsChecked = shape == selected; };
         }
         AttachMenu(shapesButton, shapes);
-        row.Children.Add(eraserButton);
         row.Children.Add(shapesButton);
         row.Children.Add(Divider(7));
         undoInkButton = ActionButton(Symbol("M 6,3 L 2,7 L 6,11 M 2,7 H 10 Q 15,7 14,13", 17), "Undo ink (Ctrl+Z)", 35, delegate { Undo(false); });
@@ -509,6 +518,25 @@ sealed partial class Inkpad : Window
 
     void SetDrawing(bool enabled)
     {
+        SetDrawingMode(enabled, false);
+    }
+
+    void ToggleEraser()
+    {
+        CloseInkPicker();
+        if (drawing && erasing) SetDrawing(false);
+        else if (!drawing) SetDrawingMode(true, true);
+        else
+        {
+            erasing = true;
+            shape = null;
+            ApplyDrawingMode();
+            FocusDrawingTool();
+        }
+    }
+
+    void SetDrawingMode(bool enabled, bool erase)
+    {
         if (!enabled) CloseInkPicker();
         if (enabled)
         {
@@ -517,11 +545,11 @@ sealed partial class Inkpad : Window
             SelectImage(null, null);
         }
         drawing = enabled;
+        erasing = erase;
         UpdateImageBar();
         if (enabled)
         {
             HideFind();
-            erasing = false;
             shape = null;
         }
         ApplyDrawingMode();
@@ -548,7 +576,7 @@ sealed partial class Inkpad : Window
         foreach (var item in current.Images) ConfigureImageInk(item);
         UpdateInkToolButtons(shaping);
         drawingBar.Visibility = drawing ? Visibility.Visible : Visibility.Collapsed;
-        drawButton.Background = drawing ? PaleBlue : Brushes.Transparent;
+        drawButton.Background = drawing && !erasing ? PaleBlue : Brushes.Transparent;
         eraserButton.Background = erasing ? PaleBlue : Brushes.Transparent;
         shapesButton.Background = shaping ? PaleBlue : Brushes.Transparent;
         shapesButton.Content = WithChevron(shaping ? WithIcon(Symbol(ShapePaths[(int)shape.Value], 17), shape.Value.ToString()) :

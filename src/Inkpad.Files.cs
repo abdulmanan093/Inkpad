@@ -512,7 +512,7 @@ static class NoteFiles
     {
         foreach (var image in DocumentImages(note.TextBox.Document.Blocks))
         {
-            image.Cursor = System.Windows.Input.Cursors.SizeAll;
+            image.Cursor = System.Windows.Input.Cursors.Arrow;
             image.ToolTip = "Click to edit or drag to move";
             System.Windows.Automation.AutomationProperties.SetName(image, "Embedded image");
         }

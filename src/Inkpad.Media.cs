@@ -1,5 +1,4 @@
 using System;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Windows;
@@ -23,9 +22,7 @@ sealed partial class Inkpad
     {
         BuildImageOverlay();
         var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(12, 1, 0, 1) };
-        var resize = ActionButton(WithIcon(Symbol("M 2,7 V 2 H 7 M 2,2 L 7,7 M 9,14 H 14 V 9 M 14,14 L 9,9", 15), "Resize"), "Resize selected image", 76, delegate { EditActiveImage(ResizeBitmap); });
         var crop = ActionButton(WithIcon(Symbol(CropIcon, 16), "Crop"), "Crop selected image", 70, StartImageCrop);
-        row.Children.Add(resize);
         row.Children.Add(crop);
         row.Children.Add(ActionButton("Copy", "Copy selected image", 60, delegate { if (activeImage != null) CopyBitmap(activeImage); }));
         row.Children.Add(ActionButton("Delete", "Delete selected image", 66, DeleteActiveImage));
@@ -36,13 +33,6 @@ sealed partial class Inkpad
         tools.Children.Add(BuildCropTools());
         imageBar.Child = Rule(tools, Surface);
         Place(imageBar, Dock.Top);
-    }
-
-    void EditActiveImage(Action<Note, Image, TextElement> edit)
-    {
-        var container = ImageContainer(activeImage);
-        if (!HasSelectedImage) return;
-        edit(imageNote, activeImage, container);
     }
 
     void UpdateImageBar()
@@ -80,20 +70,23 @@ sealed partial class Inkpad
 
     void DeleteActiveImage()
     {
-        EditActiveImage(delegate(Note note, Image image, TextElement container)
+        if (!HasSelectedImage) return;
+        var note = imageNote;
+        var item = SelectedPageImage;
+        if (item == null)
         {
-            var item = SelectedPageImage;
-            if (item == null) new TextRange(container.ElementStart, container.ElementEnd).Text = "";
-            else
-            {
-                int index = note.Images.IndexOf(item);
-                RemovePageImage(note, item);
-                note.History.Record(delegate { AddPageImage(note, item, index); }, delegate { RemovePageImage(note, item); });
-                MarkDirty(note);
-            }
-            SelectImage(null, null);
-            note.TextBox.Focus();
-        });
+            var container = ImageContainer(activeImage);
+            new TextRange(container.ElementStart, container.ElementEnd).Text = "";
+        }
+        else
+        {
+            int index = note.Images.IndexOf(item);
+            RemovePageImage(note, item);
+            note.History.Record(delegate { AddPageImage(note, item, index); }, delegate { RemovePageImage(note, item); });
+            MarkDirty(note);
+        }
+        SelectImage(null, null);
+        note.TextBox.Focus();
     }
     StackPanel BuildHighlightToolbar()
     {
@@ -186,7 +179,12 @@ sealed partial class Inkpad
         var editor = note.TextBox;
         editor.AddHandler(Mouse.QueryCursorEvent, new QueryCursorEventHandler(delegate(object sender, QueryCursorEventArgs args)
         {
-            if (note == current && TextHighlightActive)
+            if (note == current && imageMove != null)
+            {
+                args.Cursor = Cursors.Arrow;
+                args.Handled = true;
+            }
+            else if (note == current && TextHighlightActive)
             {
                 args.Cursor = Cursors.IBeam;
                 args.Handled = true;
@@ -214,7 +212,6 @@ sealed partial class Inkpad
             if (imageCrop.HasValue) StopImageCrop();
             var image = ImageAt(editor, point);
             if (image == null) { if (imageNote == note) SelectImage(null, null); return; }
-            var container = ImageContainer(image);
             args.Handled = true;
             editor.Focus();
             if (args.ChangedButton == MouseButton.Left)
@@ -225,7 +222,7 @@ sealed partial class Inkpad
             else if (args.ChangedButton == MouseButton.Right)
             {
                 SelectImage(note, image);
-                ShowImageMenu(note, image, container);
+                ShowImageMenu(note, image);
             }
         }), true);
         editor.PreviewMouseUp += delegate(object sender, MouseButtonEventArgs args)
@@ -340,16 +337,15 @@ sealed partial class Inkpad
     static Image NewInlineImage(BitmapSource source, double width)
     {
         var image = new Image { Source = source, Width = width, Height = width * source.PixelHeight / source.PixelWidth,
-            Stretch = Stretch.Uniform, Cursor = Cursors.SizeAll, ToolTip = "Click to edit or drag to move" };
+            Stretch = Stretch.Uniform, Cursor = Cursors.Arrow, ToolTip = "Click to edit or drag to move" };
         AutomationProperties.SetName(image, "Embedded image");
         return image;
     }
 
-    void ShowImageMenu(Note note, Image image, TextElement container)
+    void ShowImageMenu(Note note, Image image)
     {
         var menu = new ContextMenu { PlacementTarget = note.TextBox, Placement = PlacementMode.MousePoint };
         AddItem(menu, "Copy image", "Ctrl+C", delegate { CopyBitmap(image); });
-        AddItem(menu, "Resize…", "", delegate { Dispatcher.BeginInvoke(new Action(delegate { ResizeBitmap(note, image, container); })); });
         AddItem(menu, "Crop", "", delegate { Dispatcher.BeginInvoke(new Action(StartImageCrop)); });
         menu.Items.Add(new Separator());
         AddItem(menu, "Delete image", "Del", DeleteActiveImage);
@@ -367,19 +363,6 @@ sealed partial class Inkpad
         }
         catch (System.Runtime.InteropServices.ExternalException)
         { ShowNoteDialog("Clipboard busy", "Try copying the image again.", "OK", null); return false; }
-    }
-
-    void ResizeBitmap(Note note, Image image, TextElement container)
-    {
-        double width;
-        var item = image.Tag as PageImage;
-        double previousWidth = item == null ? image.Width : item.Bounds.Width;
-        string value = AskText("Resize image", "Width in pixels. The aspect ratio stays the same.", Math.Round(previousWidth).ToString(CultureInfo.CurrentCulture));
-        if (value == null) return;
-        if (!double.TryParse(value, out width) || double.IsNaN(width) || width < 12 || width > 10000)
-        { ShowNoteDialog("Resize image", "Enter a width from 12 to 10,000 pixels.", "OK", null); return; }
-        if (item == null) SelectImage(note, ReplaceBitmap(note, container, (BitmapSource)image.Source, width));
-        else ChangePageImage(item, new Rect(item.Bounds.TopLeft, new Size(width, width * item.Bounds.Height / previousWidth)), item.Crop);
     }
 
     internal static Image ReplaceBitmap(Note note, TextElement container, BitmapSource bitmap, double width,

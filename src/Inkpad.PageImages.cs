@@ -122,11 +122,10 @@ sealed partial class Inkpad
             if (args.ChangedButton != MouseButton.Left && args.ChangedButton != MouseButton.Right) return;
             note.TextBox.Focus();
             SelectImage(note, item.Image);
-            if (args.ChangedButton == MouseButton.Right) ShowImageMenu(note, item.Image, null);
+            if (args.ChangedButton == MouseButton.Right) ShowImageMenu(note, item.Image);
             else if (note.TextBox.CaptureMouse()) StartImageMove(args.GetPosition(page), args.GetPosition(this));
             args.Handled = true;
         };
-        item.View.Cursor = Cursors.SizeAll;
     }
 
     void AddPageImage(Note note, PageImage item, int index)
@@ -166,14 +165,16 @@ sealed partial class Inkpad
     void ConfigureImageInk(PageImage item)
     {
         var attributes = current.Ink.DefaultDrawingAttributes.Clone();
-        double scale = item.Crop.Width / item.Bounds.Width;
-        attributes.Width = Math.Max(DrawingAttributes.MinWidth, Math.Min(DrawingAttributes.MaxWidth, attributes.Width * scale));
-        attributes.Height = Math.Max(DrawingAttributes.MinHeight, Math.Min(DrawingAttributes.MaxHeight, attributes.Height * scale));
+        attributes.Width = Math.Max(DrawingAttributes.MinWidth, Math.Min(DrawingAttributes.MaxWidth, attributes.Width * item.Crop.Width / item.Bounds.Width));
+        attributes.Height = Math.Max(DrawingAttributes.MinHeight, Math.Min(DrawingAttributes.MaxHeight, attributes.Height * item.Crop.Height / item.Bounds.Height));
         item.Ink.DefaultDrawingAttributes = attributes;
         item.Ink.EditingMode = current.Ink.EditingMode;
         item.Ink.EditingModeInverted = current.Ink.EditingModeInverted;
-        item.Ink.Cursor = current.Ink.Cursor;
-        item.View.Cursor = drawing ? null : Cursors.SizeAll;
+        bool inkInput = current.Ink.IsHitTestVisible;
+        item.Ink.IsHitTestVisible = inkInput;
+        item.Ink.Cursor = inkInput ? current.Ink.Cursor : Cursors.Arrow;
+        item.View.Cursor = inkInput ? null : Cursors.Arrow;
+        item.View.ForceCursor = !inkInput;
         item.View.IsHitTestVisible = !TextHighlightActive;
     }
 

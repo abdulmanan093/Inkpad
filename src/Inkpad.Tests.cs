@@ -243,8 +243,12 @@ static class InkpadTests
         Call(editor, "Undo", true);
         Require(note.HasInk, "Redo restores the stroke");
         var eraser = (Button)Field(editor, "eraserButton");
+        Call(editor, "SetDrawing", false);
+        Require(eraser.Parent == ((Button)Field(editor, "drawButton")).Parent &&
+            ((Border)Field(editor, "drawingBar")).Visibility == Visibility.Collapsed,
+            "Keep the eraser next to Draw on the main toolbar");
         eraser.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, eraser));
-        Require(note.Ink.EditingMode == InkCanvasEditingMode.EraseByStroke, "Eraser activates stroke removal");
+        Require(note.Ink.EditingMode == InkCanvasEditingMode.EraseByStroke, "Activate stroke removal directly from typing mode");
         note.Ink.Strokes.RemoveAt(0);
         Call(editor, "Undo", false);
         Require(note.HasInk, "Undo restores an erased stroke");
@@ -402,6 +406,11 @@ static class InkpadTests
         Layout(root);
         var page = (Grid)Field(editor, "page");
         var item = note.Images.Single();
+        Require(!item.Ink.IsHitTestVisible && item.View.Cursor == Cursors.Arrow,
+            "Show the normal pointer on pictures outside drawing mode");
+        var imageTools = (Panel)Field(editor, "normalImageTools");
+        Require(System.Windows.Automation.AutomationProperties.GetName(imageTools.Children[0]) == "Crop selected image",
+            "Start the selected image toolbar with Crop");
         Require(ReferenceEquals(page.Children[1], note.Ink) && page.Children.IndexOf((Canvas)Field(editor, "imageLayer")) > 1,
             "Place images in front of text and page ink");
         var from = item.Bounds.TopLeft;
@@ -420,6 +429,31 @@ static class InkpadTests
         Require(item.Bounds.Width == 225 && item.Ink.Strokes.GetBounds() == annotation, "Resize the image and preserve its image-local ink");
         Call(editor, "Undo", false);
         Require(item.Bounds.Width == 150 && item.Ink.Strokes.GetBounds() == annotation, "Undo the resize and keep the annotation");
+        var originalBounds = item.Bounds;
+        foreach (int edge in new[] { 1, 3, 5, 7 })
+        {
+            Call(editor, "SelectImage", note, item.Image);
+            Layout(root);
+            var handle = ((Thumb[])Field(editor, "imageHandles"))[edge];
+            var start = handle.TranslatePoint(new Point(handle.ActualWidth / 2, handle.ActualHeight / 2), page);
+            var hit = VisualTreeHelper.HitTest(page, start);
+            DependencyObject target = hit == null ? null : hit.VisualHit;
+            while (target != null && !(target is Thumb)) target = VisualTreeHelper.GetParent(target);
+            Require(target == handle, "Hit the edge resize handle before dragging");
+            var deltaByEdge = edge == 1 ? new Vector(0, -20) : edge == 3 ? new Vector(30, 0) :
+                edge == 5 ? new Vector(0, 20) : new Vector(-30, 0);
+            Call(editor, "StartImageHandle", start);
+            Call(editor, "MoveImageHandle", edge, start + deltaByEdge);
+            Call(editor, "FinishImageHandle", false);
+            var bounds = item.Bounds;
+            bool horizontal = edge == 3 || edge == 7;
+            Require(horizontal ? bounds.Width == originalBounds.Width + 30 && bounds.Height == originalBounds.Height &&
+                    (edge == 3 ? bounds.Left == originalBounds.Left : bounds.Right == originalBounds.Right) :
+                    bounds.Height == originalBounds.Height + 20 && bounds.Width == originalBounds.Width &&
+                    (edge == 5 ? bounds.Top == originalBounds.Top : bounds.Bottom == originalBounds.Bottom),
+                "Resize along one axis using edge handle " + edge);
+            Call(editor, "Undo", false);
+        }
         Call(editor, "SelectImage", note, item.Image);
         Call(editor, "StartImageCrop");
         Call(editor, "StartImageHandle", item.Bounds.TopLeft);

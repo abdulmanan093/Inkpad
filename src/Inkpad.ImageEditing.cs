@@ -299,13 +299,21 @@ sealed partial class Inkpad
         else
         {
             var start = drag.Bounds;
-            double sx = handle.X == .5 ? 0 : (handle.X == 0 ? -1 : 1) * start.Width;
-            double sy = handle.Y == .5 ? 0 : (handle.Y == 0 ? -1 : 1) * start.Height;
+            var item = SelectedPageImage;
+            if (handle.X == .5 || handle.Y == .5)
+            {
+                drag.Preview = ResizeImageEdge(start, handle, delta);
+                if (item != null) item.ShowAt(drag.Preview);
+                PositionImageOverlay();
+                return;
+            }
+            double sx = handle.X == 0 ? -start.Width : start.Width;
+            double sy = handle.Y == 0 ? -start.Height : start.Height;
             double scale = 1 + (delta.X * sx + delta.Y * sy) / (sx * sx + sy * sy);
             var figure = ImageContainer(activeImage) as Figure;
-            var item = SelectedPageImage;
             double available = item == null ? Math.Max(start.Width, current.TextBox.ActualWidth - 48) :
                 Math.Max(start.Width, handle.X == 0 ? start.Right : page.ActualWidth - start.Left);
+            if (item != null && handle.Y == 0) available = Math.Min(available, start.Bottom * start.Width / start.Height);
             double width = Math.Min(available, Math.Max(Math.Min(12, start.Width), start.Width * scale));
             double align = figure == null ? 0 : figure.HorizontalAnchor == FigureHorizontalAnchor.ContentRight ? 1 :
                 figure.HorizontalAnchor == FigureHorizontalAnchor.ContentCenter ? .5 : 0;
@@ -316,6 +324,21 @@ sealed partial class Inkpad
             if (item != null) item.ShowAt(drag.Preview);
         }
         PositionImageOverlay();
+    }
+
+    Rect ResizeImageEdge(Rect start, Point handle, Vector delta)
+    {
+        double minWidth = Math.Min(12, start.Width), minHeight = Math.Min(12, start.Height);
+        double left = start.Left, right = start.Right, top = start.Top, bottom = start.Bottom;
+        if (handle.X == 0)
+            left = Math.Max(0, Math.Min(right - minWidth, left + delta.X));
+        else if (handle.X == 1)
+            right = Math.Max(left + minWidth, Math.Min(Math.Max(page.ActualWidth, right), right + delta.X));
+        else if (handle.Y == 0)
+            top = Math.Max(0, Math.Min(bottom - minHeight, top + delta.Y));
+        else
+            bottom = Math.Max(top + minHeight, Math.Min(Math.Max(page.ActualHeight, bottom), bottom + delta.Y));
+        return new Rect(new Point(left, top), new Point(right, bottom));
     }
 
     void FinishImageHandle(bool canceled)
@@ -336,8 +359,13 @@ sealed partial class Inkpad
                     item.ShowAt(item.Bounds);
                     if (!canceled) ChangePageImage(item, drag.Preview, item.Crop);
                 }
-                else if (!canceled && Math.Abs(drag.Preview.Width - drag.Bounds.Width) >= .5 && ImageContainer(activeImage) != null)
-                    SelectImage(current, ReplaceBitmap(current, ImageContainer(activeImage), (BitmapSource)activeImage.Source, drag.Preview.Width));
+                else if (!canceled && drag.Preview != drag.Bounds)
+                {
+                    bool proportional = Math.Abs(drag.Preview.Width / drag.Bounds.Width - drag.Preview.Height / drag.Bounds.Height) < .001;
+                    if (proportional)
+                        SelectImage(current, ReplaceBitmap(current, ImageContainer(activeImage), (BitmapSource)activeImage.Source, drag.Preview.Width));
+                    else ConvertLegacyImage(current, activeImage, drag.Preview);
+                }
             }
         }
         PositionImageOverlay();
