@@ -104,11 +104,22 @@ sealed partial class Inkpad
             note.TextBox.Focus();
         });
     }
-    Button BuildHighlightButton()
+    StackPanel BuildHighlightToolbar()
     {
-        var button = ActionButton(WithChevron(Symbol(MarkerIcon, 18)), "Text highlight color", 43, null);
-        button.Click += delegate { OpenInkPicker(button, true, true); };
-        return button;
+        var marker = Symbol("M 3,2 H 13 V 5 L 11,8 H 5 L 3,5 Z M 6,8 V 12 L 10,10 V 8", 18);
+        ((Grid)marker.Child).Children.Add(new Border { Height = 2.5, Width = 13, CornerRadius = new CornerRadius(1),
+            VerticalAlignment = VerticalAlignment.Bottom, Background = markerIndicator });
+        var apply = ActionButton(marker, "Apply text highlight with the current color", 28, delegate
+        {
+            CloseInkPicker();
+            HighlightText(TextHighlightBrush(markerColor));
+        });
+        var colors = ActionButton(Symbol("M 4,6 L 8,10 L 12,6", 12), "Choose text highlight color", 19, null);
+        colors.Click += delegate { OpenInkPicker(colors, true, true); };
+        var group = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        group.Children.Add(apply);
+        group.Children.Add(colors);
+        return group;
     }
 
     void HighlightText(Brush color)

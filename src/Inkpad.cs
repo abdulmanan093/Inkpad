@@ -19,7 +19,7 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyTitle("Inkpad")]
 [assembly: System.Reflection.AssemblyDescription("Offline text and drawing editor for Windows")]
 [assembly: System.Reflection.AssemblyProduct("Inkpad")]
-[assembly: System.Reflection.AssemblyVersion("1.9.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.9.1.0")]
 
 sealed partial class Inkpad : Window
 {
@@ -265,7 +265,7 @@ sealed partial class Inkpad : Window
         var table = ActionButton(WithChevron(Symbol("M 4,2 H 12 Q 14,2 14,4 V 12 Q 14,14 12,14 H 4 Q 2,14 2,12 V 4 Q 2,2 4,2 Z M 2,8 H 14 M 8,2 V 14", 19)), "Table", 56, null);
         BuildTableMenu(table);
         var clear = ActionButton(Symbol("M 1,11 L 4,3 L 7,11 M 2,8 H 6 M 10,4 V 6 M 8,5 Q 10,3 12,5 M 7,12 L 11,8 L 15,12 L 12,15 H 10 Z M 9,10 L 13,14", 20), "Clear formatting", 38, ClearFormatting);
-        foreach (var control in new UIElement[] { headings, bullets, checkbox, boldButton, italicButton, strikeButton, BuildHighlightButton(), link, table, clear }) formatting.Children.Add(control);
+        foreach (var control in new UIElement[] { headings, bullets, checkbox, boldButton, italicButton, strikeButton, BuildHighlightToolbar(), link, table, clear }) formatting.Children.Add(control);
 
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
         Grid.SetColumn(actions, 2);

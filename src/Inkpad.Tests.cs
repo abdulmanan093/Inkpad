@@ -303,6 +303,7 @@ static class InkpadTests
         Call(editor, "HighlightText", Brushes.Gold);
         Require(((SolidColorBrush)note.TextBox.Selection.GetPropertyValue(TextElement.BackgroundProperty)).Color == Colors.Gold,
             "Highlight selected text from the editor command");
+        TestHighlightToolbar(editor, note, root);
         note.Markdown = true;
         note.SetPlainText("# Heading\n** unfinished\n- A list item");
         Call(editor, "SetMarkdownPreview", true);
@@ -384,6 +385,42 @@ static class InkpadTests
         Call(editor, "UpdateTabs");
         Call(editor, "UpdateStatus");
         Layout(root);
+    }
+
+    static void TestHighlightToolbar(Inkpad editor, Note note, FrameworkElement root)
+    {
+        note.SetPlainText("Selected text\nAnother line");
+        Layout(root);
+        var toolbar = Descendants(root).OfType<Button>().ToArray();
+        var apply = toolbar.Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Apply text highlight with the current color");
+        var colors = toolbar.Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Choose text highlight color");
+        var indicator = ((Grid)((Viewbox)apply.Content).Child).Children.OfType<Border>().Single();
+        var paragraph = (Paragraph)note.TextBox.Document.Blocks.FirstBlock;
+        var start = paragraph.Inlines.FirstInline.ContentStart;
+        note.TextBox.Selection.Select(start, start.GetPositionAtOffset(8));
+        colors.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, colors));
+        var popup = (Popup)Field(editor, "inkPicker");
+        var palette = (FrameworkElement)popup.Child;
+        palette.Measure(new Size(400, 400));
+        palette.Arrange(new Rect(palette.DesiredSize));
+        var items = Descendants(palette).ToArray();
+        Require(!items.OfType<Canvas>().Any() && !items.OfType<Slider>().Any(), "Keep the text highlight palette free of drawing previews and thickness controls");
+        var pink = items.OfType<Button>().Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Color #F481C2");
+        pink.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, pink));
+        var color = Color.FromRgb(244, 129, 194);
+        Require(!popup.IsOpen && ((SolidColorBrush)indicator.Background).Color == color && !note.TextBox.Selection.IsEmpty &&
+            !(note.TextBox.Selection.GetPropertyValue(TextElement.BackgroundProperty) is SolidColorBrush),
+            "Changing the palette color updates the icon without formatting or losing the selected text");
+        apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, apply));
+        var first = paragraph.Inlines.OfType<Run>().ToArray();
+        Require(first[0].Text == "Selected" && ((SolidColorBrush)first[0].Background).Color == Color.FromArgb(126, color.R, color.G, color.B) &&
+            !(first[1].Background is SolidColorBrush), "Apply the chosen color directly to the selected words");
+        var second = (Paragraph)paragraph.NextBlock;
+        note.TextBox.CaretPosition = second.Inlines.FirstInline.ContentStart;
+        Layout(root);
+        apply.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, apply));
+        Require(((SolidColorBrush)second.Inlines.FirstInline.Background).Color == ((SolidColorBrush)first[0].Background).Color,
+            "Reuse the color with one click to highlight the current line");
     }
 
     static void TestInkTools(string directory, Inkpad editor, Note note, FrameworkElement root)

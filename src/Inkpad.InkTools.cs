@@ -37,7 +37,9 @@ sealed partial class Inkpad
                 </Thumb></Track.Thumb>
             </Track>
         </Grid></ControlTemplate>");
-    Color pencilColor = ColorOf("#202020"), markerColor = ColorOf("#FFEB3B");
+    Color pencilColor = ColorOf("#202020");
+    readonly SolidColorBrush markerIndicator = new SolidColorBrush(ColorOf("#FFEB3B"));
+    Color markerColor { get { return markerIndicator.Color; } set { markerIndicator.Color = value; } }
     double pencilWidth = 2.8, markerWidth = 18;
     bool highlighter, textOnlyHighlight;
     Button markerButton, pencilOptions, markerOptions;
@@ -103,7 +105,7 @@ sealed partial class Inkpad
             VerticalAlignment = VerticalAlignment.Center, Fill = new SolidColorBrush(pencilColor), Stroke = Muted, StrokeThickness = .5 });
         markerButton.Content = WithIcon(Symbol(MarkerIcon, 18, Text), "Highlighter");
         ((StackPanel)markerButton.Content).Children.Add(new Ellipse { Width = 6, Height = 6, Margin = new Thickness(4, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Center, Fill = new SolidColorBrush(markerColor) });
+            VerticalAlignment = VerticalAlignment.Center, Fill = markerIndicator });
         penButton.Background = pen ? PaleBlue : Brushes.Transparent;
         markerButton.Background = mark ? PaleBlue : Brushes.Transparent;
         pencilOptions.Background = pen ? PaleBlue : Brushes.Transparent;
@@ -133,22 +135,29 @@ sealed partial class Inkpad
         var samples = new List<Tuple<Color, Border>>();
         panel.Children.Add(palette);
 
-        var preview = new Viewbox { Height = 55, Margin = new Thickness(3, 4, 3, 5), Stretch = Stretch.Fill, IsHitTestVisible = false };
-        var track = new Canvas { Width = 230, Height = 55 };
-        var stroke = new Path { Data = Geometry.Parse("M 14,34 C 52,4 75,8 113,26 C 152,46 179,42 216,16"),
-            StrokeStartLineCap = marker ? PenLineCap.Flat : PenLineCap.Round,
-            StrokeEndLineCap = marker ? PenLineCap.Flat : PenLineCap.Round };
-        track.Children.Add(stroke);
-        preview.Child = track;
-        panel.Children.Add(preview);
+        Path stroke = null;
+        if (!formatText)
+        {
+            var preview = new Viewbox { Height = 55, Margin = new Thickness(3, 4, 3, 5), Stretch = Stretch.Fill, IsHitTestVisible = false };
+            var track = new Canvas { Width = 230, Height = 55 };
+            stroke = new Path { Data = Geometry.Parse("M 14,34 C 52,4 75,8 113,26 C 152,46 179,42 216,16"),
+                StrokeStartLineCap = marker ? PenLineCap.Flat : PenLineCap.Round,
+                StrokeEndLineCap = marker ? PenLineCap.Flat : PenLineCap.Round };
+            track.Children.Add(stroke);
+            preview.Child = track;
+            panel.Children.Add(preview);
+        }
 
         Action update = delegate
         {
             Color chosen = marker ? markerColor : pencilColor;
             foreach (var sample in samples) sample.Item2.BorderBrush = sample.Item1 == chosen ? Brush("#0078D4") : Brushes.Transparent;
-            stroke.Stroke = new SolidColorBrush(chosen);
-            stroke.Opacity = marker ? .58 : 1;
-            stroke.StrokeThickness = marker ? markerWidth : pencilWidth;
+            if (stroke != null)
+            {
+                stroke.Stroke = new SolidColorBrush(chosen);
+                stroke.Opacity = marker ? .58 : 1;
+                stroke.StrokeThickness = marker ? markerWidth : pencilWidth;
+            }
         };
         Action<Color> choose = delegate(Color color)
         {
@@ -157,7 +166,8 @@ sealed partial class Inkpad
             if (formatText)
             {
                 popup.IsOpen = false;
-                HighlightText(TextHighlightBrush(color));
+                if (drawing) ApplyDrawingMode();
+                FocusDrawingTool();
             }
             else
             {
@@ -165,6 +175,7 @@ sealed partial class Inkpad
                 update();
             }
         };
+        Button selectedSwatch = null;
         foreach (var hex in marker ? MarkerPalette : PencilPalette)
         {
             Color color = ColorOf(hex);
@@ -175,15 +186,24 @@ sealed partial class Inkpad
             var chip = ActionButton(outer, "Color " + hex, 37, delegate { choose(color); });
             chip.Height = 37;
             palette.Children.Add(chip);
+            if (color == (marker ? markerColor : pencilColor)) selectedSwatch = chip;
         }
         var custom = ActionButton("More colors…", "Choose a custom color", 106, delegate
         {
             popup.IsOpen = false;
             var color = PickColor(marker ? markerColor : pencilColor);
             if (color.HasValue) choose(color.Value);
+            else if (formatText) current.TextBox.Focus();
             if (!formatText) FocusDrawingTool();
         });
-        custom.HorizontalAlignment = HorizontalAlignment.Left;
+        custom.HorizontalAlignment = formatText ? HorizontalAlignment.Stretch : HorizontalAlignment.Left;
+        if (formatText)
+        {
+            custom.Width = double.NaN;
+            custom.HorizontalContentAlignment = HorizontalAlignment.Left;
+            custom.Padding = new Thickness(8, 0, 0, 0);
+            custom.Margin = new Thickness(0, 7, 0, 0);
+        }
 
         if (!formatText)
         {
@@ -212,11 +232,16 @@ sealed partial class Inkpad
         }
         panel.Children.Add(custom);
         if (formatText)
-            panel.Children.Add(ActionButton("Remove highlight", "Remove highlight", 129, delegate
+        {
+            var remove = ActionButton("Remove highlight", "Remove highlight", double.NaN, delegate
             {
                 popup.IsOpen = false;
                 HighlightText(Brushes.Transparent);
-            }));
+            });
+            remove.HorizontalContentAlignment = HorizontalAlignment.Left;
+            remove.Padding = new Thickness(8, 0, 0, 0);
+            panel.Children.Add(remove);
+        }
         else if (marker)
         {
             var footer = new DockPanel { Margin = new Thickness(0, 8, 0, 0) };
@@ -244,7 +269,7 @@ sealed partial class Inkpad
         popup.Opened += delegate
         {
             InkpadStyle.AnimateIn(frame, -3);
-            if (Mouse.LeftButton == MouseButtonState.Released) ((Button)palette.Children[0]).Focus();
+            if (Mouse.LeftButton == MouseButtonState.Released) (selectedSwatch ?? (Button)palette.Children[0]).Focus();
         };
         popup.Closed += delegate
         {
