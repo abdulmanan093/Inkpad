@@ -19,7 +19,7 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyTitle("Inkpad")]
 [assembly: System.Reflection.AssemblyDescription("Offline text and drawing editor for Windows")]
 [assembly: System.Reflection.AssemblyProduct("Inkpad")]
-[assembly: System.Reflection.AssemblyVersion("1.7.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.7.1.0")]
 
 sealed partial class Inkpad : Window
 {

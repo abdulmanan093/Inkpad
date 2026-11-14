@@ -60,7 +60,10 @@ sealed partial class Inkpad
         var button = ActionButton(Symbol("M 2,3 H 14 V 13 H 2 Z M 2,11 L 6,7 L 9,10 L 11,8 L 14,11 M 10,5 H 10.3", 18), "Insert image", 32, null);
         var menu = new ContextMenu();
         AddItem(menu, "Insert image from file…", "", InsertImageFile);
-        AddItem(menu, "Paste image", "Ctrl+V", delegate { current.TextBox.Paste(); });
+        AddItem(menu, "Paste image", "Ctrl+V", delegate
+        {
+            if (!TryPasteBitmap(current)) ShowNoteDialog("Paste image", "Copy an image to the clipboard first.", "OK", null);
+        });
         AttachMenu(button, menu);
         return button;
     }
@@ -83,18 +86,6 @@ sealed partial class Inkpad
     void AddMediaEditing(Note note)
     {
         var editor = note.TextBox;
-        editor.CommandBindings.Add(new CommandBinding(ApplicationCommands.Paste, delegate(object sender, ExecutedRoutedEventArgs args)
-        {
-            try
-            {
-                if (!Clipboard.ContainsImage()) return;
-                var bitmap = Clipboard.GetImage();
-                if (bitmap == null) return;
-                InsertBitmap(note, bitmap);
-                args.Handled = true;
-            }
-            catch (Exception error) { args.Handled = true; FileError("paste an image into", error); }
-        }));
         DataObject.AddPastingHandler(editor, delegate(object sender, DataObjectPastingEventArgs args)
         {
             try
@@ -123,6 +114,8 @@ sealed partial class Inkpad
         }), true);
         editor.PreviewKeyDown += delegate(object sender, KeyEventArgs args)
         {
+            if (args.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control && TryPasteBitmap(note))
+            { args.Handled = true; return; }
             var image = SelectedImage(editor);
             if (image == null) return;
             if (args.Key == Key.Delete || args.Key == Key.Back)
@@ -132,6 +125,19 @@ sealed partial class Inkpad
             else if (args.Key == Key.X && Keyboard.Modifiers == ModifierKeys.Control)
             { if (CopyBitmap(image)) editor.Selection.Text = ""; args.Handled = true; }
         };
+    }
+
+    bool TryPasteBitmap(Note note)
+    {
+        try
+        {
+            if (!Clipboard.ContainsImage()) return false;
+            var bitmap = Clipboard.GetImage();
+            if (bitmap == null) return false;
+            InsertBitmap(note, bitmap);
+        }
+        catch (Exception error) { FileError("paste an image into", error); }
+        return true;
     }
 
     internal static Image SelectedImage(RichTextBox editor)
