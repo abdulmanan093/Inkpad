@@ -26,6 +26,8 @@ static class InkpadTests
             TestPlainText(directory);
             TestNoteFiles(directory);
             TestRestrictedFolderSave(directory);
+            TestMediaFiles(directory);
+            TestPreferences(directory);
             TestTablesAndLinks(directory);
             TestWindowPlacement(directory);
             TestShapes();
@@ -38,6 +40,55 @@ static class InkpadTests
             Console.Error.WriteLine(error);
             return 1;
         }
+    }
+
+    static void TestPreferences(string directory)
+    {
+        string path = Path.Combine(directory, "editor-preferences.xml");
+        var settings = new InkpadPreferences { Theme = "Dark", Font = "Segoe UI", FontSize = 20, Restore = true, Spelling = true };
+        settings.RecentFiles.Add(@"C:\Test\Recent.txt");
+        settings.OpenFiles.Add(@"C:\Test\Open.txt");
+        settings.RememberColor(Color.FromRgb(30, 60, 90));
+        settings.RememberColor(Color.FromRgb(11, 22, 33));
+        settings.RememberColor(Color.FromRgb(30, 60, 90));
+        settings.Save(path);
+        var loaded = InkpadPreferences.Load(path);
+        Require(loaded.Theme == "Dark" && loaded.Font == "Segoe UI" && loaded.FontSize == 20 && loaded.Restore && loaded.Spelling,
+            "Restore editor preferences from local settings");
+        Require(loaded.CheckboxColors.SequenceEqual(new[] { 0x1E3C5A, 0x0B1621 }), "Remember custom checkbox colors in most-recent order across launches");
+        Require(loaded.RecentFiles.SequenceEqual(settings.RecentFiles) && loaded.OpenFiles.SequenceEqual(settings.OpenFiles), "Restore recent files and session paths");
+        Require(Inkpad.TransformWriting("One. Two. Three.", "List") == "- One.\r\n- Two.\r\n- Three." &&
+            Inkpad.TransformWriting("I can't go.", "Formal") == "I cannot go.", "Run writing tools offline");
+    }
+
+    static void TestMediaFiles(string directory)
+    {
+        var bitmap = BitmapSource.Create(24, 16, 96, 96, PixelFormats.Bgra32, null,
+            Enumerable.Repeat((byte)255, 24 * 16 * 4).ToArray(), 24 * 4);
+        var note = new Note();
+        note.SetPlainText("Highlighted text\n");
+        var p = (Paragraph)note.TextBox.Document.Blocks.FirstBlock;
+        var color = Color.FromRgb(255, 226, 119);
+        new TextRange(p.ContentStart, p.ContentEnd).ApplyPropertyValue(TextElement.BackgroundProperty, new SolidColorBrush(color));
+        note.TextBox.CaretPosition = note.TextBox.Document.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
+        var image = Inkpad.InsertBitmap(note, bitmap);
+        var container = (InlineUIContainer)image.Parent;
+        Inkpad.ReplaceBitmap(note, container, new CroppedBitmap(bitmap, new Int32Rect(2, 3, 14, 9)), 28);
+        string path = Path.Combine(directory, "image-highlight.inknote");
+        NoteFiles.Save(note, path, false);
+        var restored = new Note();
+        NoteFiles.Load(restored, path);
+        var first = restored.TextBox.Document.Blocks.OfType<Paragraph>().First(block => new TextRange(block.ContentStart, block.ContentEnd).Text.Contains("Highlighted text"));
+        var firstCharacter = first.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
+        var highlight = new TextRange(firstCharacter, firstCharacter.GetPositionAtOffset(1)).GetPropertyValue(TextElement.BackgroundProperty) as SolidColorBrush;
+        Require(highlight != null && highlight.Color == color, "Preserve custom text highlighting in the saved note");
+        var restoredImage = NoteFiles.DocumentInlines(restored.Range).OfType<InlineUIContainer>().Select(item => item.Child).OfType<Image>().Single();
+        Require(restoredImage.Source is BitmapSource && Math.Abs(restoredImage.Width - 28) < 1,
+            "Preserve the cropped image and its display size in the saved note");
+        var restoredContainer = (InlineUIContainer)restoredImage.Parent;
+        new TextRange(restoredContainer.ElementStart, restoredContainer.ElementEnd).Text = "";
+        Require(!restored.TextBox.Document.Blocks.OfType<Paragraph>().SelectMany(block => block.Inlines.OfType<InlineUIContainer>()).Any(),
+            "Delete a selected embedded image");
     }
 
     static void TestRestrictedFolderSave(string directory)
@@ -153,6 +204,7 @@ static class InkpadTests
         TestChecklist(directory, editor, note, root);
         TestCheckboxColors(directory, editor, note, root);
         TestTabIndicators(directory, editor, note, root);
+        TestSettingsAndEditing(directory, editor, note, root);
         Require(note.TextBox.ActualHeight > 400 && note.Ink.ActualHeight == note.TextBox.ActualHeight, "Editor and ink layer share a full-height page");
         Require(!note.Ink.IsHitTestVisible, "Typing mode permits text input");
         note.SetPlainText(string.Join("\n", Enumerable.Repeat("A line in a long note", 240)));
@@ -203,6 +255,60 @@ static class InkpadTests
         RenderPreview(directory, editor, note, root, rectangle);
         VerifyWindowReopen(directory);
         application.Shutdown();
+    }
+
+    static void TestSettingsAndEditing(string directory, Inkpad editor, Note note, FrameworkElement root)
+    {
+        var settings = Descendants(root).OfType<Button>().Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Settings");
+        settings.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, settings));
+        Layout(root, new Size(1440, 900));
+        Require(((ScrollViewer)Field(editor, "settingsPage")).Visibility == Visibility.Visible &&
+            Descendants(root).OfType<Image>().Any(mark => ReferenceEquals(mark.Source, editor.Icon)), "Show Notepad-style settings with the same icon as the Desktop executable");
+        var preview = new RenderTargetBitmap(1440, 900, 96, 96, PixelFormats.Pbgra32);
+        preview.Render(root);
+        var png = new PngBitmapEncoder();
+        png.Frames.Add(BitmapFrame.Create(preview));
+        using (var file = File.Create(Path.Combine(directory, "settings.png"))) png.Save(file);
+        Call(editor, "CloseSettings", false);
+        Layout(root);
+
+        note.SetPlainText("One apple, two apples.");
+        ((TextBox)Field(editor, "findBox")).Text = "apple";
+        ((TextBox)Field(editor, "replaceBox")).Text = "pear";
+        Call(editor, "ReplaceText", true);
+        Require(note.PlainText == "One pear, two pears.", "Replace all matches without discarding surrounding text");
+        var selectionParagraph = (Paragraph)note.TextBox.Document.Blocks.FirstBlock;
+        var selectionStart = selectionParagraph.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
+        note.TextBox.Selection.Select(selectionStart, selectionStart.GetPositionAtOffset(3));
+        Call(editor, "HighlightText", Brushes.Gold);
+        Require(((SolidColorBrush)note.TextBox.Selection.GetPropertyValue(TextElement.BackgroundProperty)).Color == Colors.Gold,
+            "Highlight selected text from the editor command");
+        note.Markdown = true;
+        note.SetPlainText("# Heading\n** unfinished\n- A list item");
+        Call(editor, "SetMarkdownPreview", true);
+        Require(((RichTextBox)Field(editor, "markdownPreview")).Document.Blocks.Count == 3, "Preview Markdown and keep unfinished markup editable");
+        Call(editor, "SetMarkdownPreview", false);
+        note.Markdown = false;
+
+        note.SetPlainText("Image test\n");
+        var bitmap = BitmapSource.Create(8, 8, 96, 96, PixelFormats.Bgra32, null, new byte[256], 32);
+        note.TextBox.CaretPosition = note.TextBox.Document.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
+        var image = Inkpad.InsertBitmap(note, bitmap);
+        var container = (InlineUIContainer)image.Parent;
+        note.TextBox.Selection.Select(container.ElementStart, container.ElementEnd);
+        Require(ReferenceEquals(Inkpad.SelectedImage(note.TextBox), image), "Recognize a selected image for copy or delete");
+        note.TextBox.CaretPosition = note.TextBox.Document.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
+        var data = new DataObject(DataFormats.Bitmap, bitmap);
+        var paste = new DataObjectPastingEventArgs(data, false, DataFormats.Bitmap);
+        note.TextBox.RaiseEvent(paste);
+        Require(paste.CommandCancelled && NoteFiles.DocumentInlines(note.Range).OfType<InlineUIContainer>().Count() == 2,
+            "Paste a bitmap through the editor's clipboard handler");
+        note.SetPlainText("");
+        note.Formatted = false;
+        note.Dirty = false;
+        Call(editor, "UpdateTabs");
+        Call(editor, "UpdateStatus");
+        Layout(root);
     }
 
     static void TestTabIndicators(string directory, Inkpad editor, Note note, FrameworkElement root)
@@ -616,7 +722,10 @@ static class InkpadTests
     static void RenderPreview(string directory, Inkpad editor, Note note, FrameworkElement root, MenuItem rectangle)
     {
         note.Path = Path.Combine(directory, "Project notes.inknote");
-        note.SetPlainText("Project notes\n\n- Review the first draft\n- Sketch the layout\n\nNext steps");
+        note.SetPlainText("Project notes\n\n\u2611 Review the first draft\n\u2610 Sketch the layout\n\nNext steps");
+        var lines = note.TextBox.Document.Blocks.OfType<Paragraph>().ToArray();
+        FirstCheckbox(lines[2]).ApplyPropertyValue(TextElement.ForegroundProperty, Brushes.SeaGreen);
+        FirstCheckbox(lines[3]).ApplyPropertyValue(TextElement.ForegroundProperty, Brushes.RoyalBlue);
         var after = (Paragraph)note.TextBox.Document.Blocks.LastBlock;
         note.TextBox.CaretPosition = after.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
         var table = NoteTables.Insert(note.TextBox, 3, 2);
@@ -641,8 +750,8 @@ static class InkpadTests
         Call(editor, "UpdateTabs");
         Call(editor, "SetDrawing", true);
         rectangle.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent, rectangle));
-        Layout(root);
-        var preview = new RenderTargetBitmap(1120, 690, 96, 96, PixelFormats.Pbgra32);
+        Layout(root, new Size(1440, 900));
+        var preview = new RenderTargetBitmap(1440, 900, 96, 96, PixelFormats.Pbgra32);
         preview.Render(root);
         var png = new PngBitmapEncoder();
         png.Frames.Add(BitmapFrame.Create(preview));
@@ -672,9 +781,10 @@ static class InkpadTests
             new DrawingAttributes { Color = Colors.RoyalBlue, Height = 3, Width = 3 });
     }
 
-    static void Layout(FrameworkElement root)
+    static void Layout(FrameworkElement root) { Layout(root, new Size(1120, 690)); }
+
+    static void Layout(FrameworkElement root, Size size)
     {
-        var size = new Size(1120, 690);
         for (int pass = 0; pass < 3; pass++)
         {
             root.Measure(size);

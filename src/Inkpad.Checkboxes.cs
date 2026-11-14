@@ -34,6 +34,20 @@ sealed partial class Inkpad
             item.IsCheckable = true;
             menu.Opened += delegate { item.IsChecked = choice == null ? checkboxBrush == null : checkboxBrush != null && checkboxBrush.Color == choice.Color; };
         }
+        var recent = new MenuItem { Header = "Recent colors" };
+        menu.Items.Add(recent);
+        menu.Opened += delegate
+        {
+            recent.Items.Clear();
+            foreach (int rgb in Preferences.CheckboxColors)
+            {
+                var brush = new SolidColorBrush(Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb));
+                var choice = AddItem(recent, "#" + rgb.ToString("X6"), "", delegate { SetCheckboxColor(brush); });
+                choice.Icon = new Border { Width = 12, Height = 12, Background = brush, CornerRadius = new CornerRadius(2) };
+            }
+            if (!recent.HasItems) AddItem(recent, "No recent colors", "", delegate { }).IsEnabled = false;
+            InkpadStyle.StyleItems(recent);
+        };
         menu.Items.Add(new Separator());
         AddItem(menu, "More colors…", "", delegate { Dispatcher.BeginInvoke(new Action(PickCustomCheckboxColor)); });
         AttachMenu(picker, menu);
@@ -44,13 +58,31 @@ sealed partial class Inkpad
 
     void PickCustomCheckboxColor()
     {
-        var color = (checkboxBrush ?? (SolidColorBrush)Text).Color;
+        var color = PickColor((checkboxBrush ?? (SolidColorBrush)Text).Color, Preferences.CheckboxColors);
+        if (!color.HasValue) return;
+        Preferences.RememberColor(color.Value);
+        Preferences.Save();
+        SetCheckboxColor(new SolidColorBrush(color.Value));
+    }
+
+    Color? PickColor(Color color, List<int> custom = null)
+    {
         using (var dialog = new System.Windows.Forms.ColorDialog { FullOpen = true, AnyColor = true,
             Color = System.Drawing.Color.FromArgb(color.R, color.G, color.B) })
         {
+            if (custom != null && custom.Count != 0)
+            {
+                var colors = new int[16];
+                for (int index = 0; index < custom.Count; index++)
+                {
+                    int rgb = custom[index];
+                    colors[index] = ((rgb & 255) << 16) | (rgb & 0xff00) | ((rgb >> 16) & 255);
+                }
+                dialog.CustomColors = colors;
+            }
             var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
-            if (dialog.ShowDialog(new ColorDialogOwner(handle)) != System.Windows.Forms.DialogResult.OK) return;
-            SetCheckboxColor(new SolidColorBrush(Color.FromRgb(dialog.Color.R, dialog.Color.G, dialog.Color.B)));
+            if (dialog.ShowDialog(new ColorDialogOwner(handle)) != System.Windows.Forms.DialogResult.OK) return null;
+            return Color.FromRgb(dialog.Color.R, dialog.Color.G, dialog.Color.B);
         }
     }
 

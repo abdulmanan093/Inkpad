@@ -1,7 +1,9 @@
 using System;
 using System.Globalization;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -18,6 +20,7 @@ sealed class Note
     internal bool ReplayingInk;
     internal bool Dirty;
     internal bool Formatted;
+    internal bool Markdown;
     internal int? CharacterCount;
     internal string Path;
     internal Encoding Encoding = new UTF8Encoding(false, true);
@@ -57,6 +60,7 @@ sealed class Note
         System.Windows.Automation.AutomationProperties.SetName(Ink, "Drawing on the note");
         DataObject.AddPastingHandler(TextBox, delegate(object sender, DataObjectPastingEventArgs args)
         {
+            if (args.SourceDataObject.GetDataPresent(DataFormats.Bitmap)) return;
             if (args.SourceDataObject.GetDataPresent(DataFormats.UnicodeText))
                 args.FormatToApply = DataFormats.UnicodeText;
             else if (args.SourceDataObject.GetDataPresent(DataFormats.Text))
@@ -87,6 +91,21 @@ sealed class Note
 
 static class NoteFiles
 {
+    internal static IEnumerable<Inline> DocumentInlines(TextRange range)
+    {
+        var seen = new HashSet<Inline>();
+        for (var at = range.Start; at != null && at.CompareTo(range.End) < 0; at = at.GetNextContextPosition(LogicalDirection.Forward))
+        {
+            var current = at.Parent as Inline;
+            if (current != null && seen.Add(current)) yield return current;
+            if (at.GetPointerContext(LogicalDirection.Forward) == TextPointerContext.ElementStart)
+            {
+                var next = at.GetAdjacentElement(LogicalDirection.Forward) as Inline;
+                if (next != null && seen.Add(next)) yield return next;
+            }
+        }
+    }
+
     internal const string InkExtension = ".inknote";
 
     internal static bool IsInkFile(string path)
@@ -115,6 +134,8 @@ static class NoteFiles
                 note.Formatted = metadata[2] == "1";
                 using (var text = Entry(archive, "text.rtf", 64L * 1024 * 1024))
                     note.Range.Load(text, DataFormats.Rtf);
+                RestoreHighlights(note, archive);
+                RestoreEmbeddedImages(note);
                 NoteTables.StyleLoaded(note.TextBox.Document);
                 using (var ink = Entry(archive, "ink.isf", 64L * 1024 * 1024))
                 {
@@ -158,6 +179,7 @@ static class NoteFiles
         note.TextBox.IsUndoEnabled = true;
         note.TextBox.CaretPosition = note.TextBox.Document.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
         note.Path = path;
+        note.Markdown = string.Equals(Path.GetExtension(path), ".md", StringComparison.OrdinalIgnoreCase);
     }
 
     internal static void Save(Note note, string path, bool export, Func<string, FileStream> createSibling = null)
@@ -272,12 +294,56 @@ static class NoteFiles
                 text.Position = 0;
                 using (var entry = archive.CreateEntry("text.rtf").Open()) text.CopyTo(entry);
             }
+            SaveHighlights(note, archive);
             using (var strokes = new MemoryStream())
             {
                 note.Ink.Strokes.Save(strokes);
                 strokes.Position = 0;
                 using (var entry = archive.CreateEntry("ink.isf").Open()) strokes.CopyTo(entry);
             }
+        }
+    }
+
+    static void SaveHighlights(Note note, ZipArchive archive)
+    {
+        var origin = note.TextBox.Document.ContentStart;
+        var runs = DocumentInlines(note.Range).OfType<Run>().Where(run => run.Background is System.Windows.Media.SolidColorBrush).ToArray();
+        if (runs.Length == 0) return;
+        using (var data = new StreamWriter(archive.CreateEntry("highlights.tsv").Open(), new UTF8Encoding(false)))
+            foreach (var run in runs)
+            {
+                var color = ((System.Windows.Media.SolidColorBrush)run.Background).Color;
+                if (color.A == 0 || run.Text.Length == 0) continue;
+                int start = new TextRange(origin, run.ContentStart).Text.Length;
+                data.WriteLine(start.ToString(CultureInfo.InvariantCulture) + "\t" + run.Text.Length.ToString(CultureInfo.InvariantCulture) + "\t" + color);
+            }
+    }
+
+    static void RestoreHighlights(Note note, ZipArchive archive)
+    {
+        if (archive.GetEntry("highlights.tsv") == null) return;
+        var document = note.TextBox.Document;
+        int length = note.PlainText.Length;
+        using (var data = new StreamReader(Entry(archive, "highlights.tsv", 8 * 1024 * 1024)))
+            for (string line = data.ReadLine(); line != null; line = data.ReadLine())
+            {
+                var fields = line.Split('\t');
+                int start, count;
+                uint color;
+                if (fields.Length != 3 || !int.TryParse(fields[0], out start) || !int.TryParse(fields[1], out count) || start < 0 || count <= 0 || start > length - count ||
+                    fields[2].Length != 9 || fields[2][0] != '#' || !uint.TryParse(fields[2].Substring(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out color)) continue;
+                var paint = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb((byte)(color >> 24), (byte)(color >> 16), (byte)(color >> 8), (byte)color));
+                new TextRange(Inkpad.TextLocation(document, start), Inkpad.TextLocation(document, start + count)).ApplyPropertyValue(TextElement.BackgroundProperty, paint);
+            }
+    }
+
+    static void RestoreEmbeddedImages(Note note)
+    {
+        foreach (var image in DocumentInlines(note.Range).OfType<InlineUIContainer>().Select(container => container.Child).OfType<Image>())
+        {
+            image.Cursor = System.Windows.Input.Cursors.Hand;
+            image.ToolTip = "Right-click to resize, crop, copy, or delete";
+            System.Windows.Automation.AutomationProperties.SetName(image, "Embedded image");
         }
     }
 

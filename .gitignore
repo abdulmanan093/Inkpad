@@ -1,6 +1,7 @@
 *.exe
 *.pdb
 *.lnk
+*.msix
 *.inknote
 /src/qa/
 .vs/

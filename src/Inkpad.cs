@@ -19,13 +19,13 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyTitle("Inkpad")]
 [assembly: System.Reflection.AssemblyDescription("Offline text and drawing editor for Windows")]
 [assembly: System.Reflection.AssemblyProduct("Inkpad")]
-[assembly: System.Reflection.AssemblyVersion("1.6.1.0")]
+[assembly: System.Reflection.AssemblyVersion("1.7.0.0")]
 
 sealed partial class Inkpad : Window
 {
-    static readonly Brush Chrome = Brush("#E7E7E7"), Surface = Brush("#F6F6F6"), Paper = Brush("#F6F6F6"),
-        Line = Brush("#E4E4E4"), Text = Brush("#191919"), Muted = Brush("#5C5C5C"),
-        Blue = Brush("#124C86"), PaleBlue = Brush("#DCEBFA");
+    static readonly Brush Chrome = new SolidColorBrush(ColorOf("#E7E7E7")), Surface = new SolidColorBrush(ColorOf("#F6F6F6")), Paper = new SolidColorBrush(ColorOf("#F6F6F6")),
+        Line = new SolidColorBrush(ColorOf("#E4E4E4")), Text = new SolidColorBrush(ColorOf("#191919")), Muted = new SolidColorBrush(ColorOf("#5C5C5C")),
+        Blue = Brush("#124C86"), PaleBlue = new SolidColorBrush(ColorOf("#DCEBFA"));
     static readonly Color[] InkColors = { ColorOf("#202020"), ColorOf("#175CB8"), ColorOf("#BF293D"), ColorOf("#08795D") };
     static readonly string[] InkColorNames = { "Black", "Blue", "Red", "Green" };
     static readonly double[] InkSizes = { 1.5, 2.8, 5, 9 };
@@ -60,6 +60,7 @@ sealed partial class Inkpad : Window
     [STAThread]
     public static void Main(string[] paths)
     {
+#if !STORE
         if (paths.Length == 1 && (paths[0] == "--enable-explorer-menu" || paths[0] == "--disable-explorer-menu"))
         {
             try { InkpadWindows.SetExplorerMenu(paths[0] == "--enable-explorer-menu"); }
@@ -70,9 +71,10 @@ sealed partial class Inkpad : Window
             }
             return;
         }
-        var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+#endif
+        var app = new Application { ShutdownMode = ShutdownMode.OnLastWindowClose };
         var window = new Inkpad();
-        if (paths.Length > 0) window.Loaded += delegate { foreach (string path in paths) window.OpenPath(path); };
+        window.Loaded += delegate { window.OpenStartup(paths); };
         app.Run(window);
     }
 
@@ -114,8 +116,12 @@ sealed partial class Inkpad : Window
         </Style>");
         UseLayoutRounding = true;
         SnapsToDevicePixels = true;
-        Content = new Border { Background = Surface, BorderBrush = Brush("#BDBDBD"), BorderThickness = new Thickness(1), Child = shell };
-        BuildTitleBar();
+        workspace = new Grid();
+        var chrome = new DockPanel();
+        workspace.Children.Add(shell);
+        Content = new Border { Background = Surface, BorderBrush = Brush("#BDBDBD"), BorderThickness = new Thickness(1), Child = chrome };
+        BuildTitleBar(chrome);
+        chrome.Children.Add(workspace);
         BuildToolbar();
         BuildDrawingBar();
         BuildFindBar();
@@ -142,16 +148,19 @@ sealed partial class Inkpad : Window
         PreviewDrop += delegate(object sender, DragEventArgs args)
         {
             if (!args.Data.GetDataPresent(DataFormats.FileDrop)) return;
-            foreach (string path in (string[])args.Data.GetData(DataFormats.FileDrop)) OpenPath(path);
+            OpenFiles((string[])args.Data.GetData(DataFormats.FileDrop));
             args.Handled = true;
         };
         AddNote(new Note());
+        ApplyPreferences();
     }
 
-    void BuildTitleBar()
+    void BuildTitleBar(DockPanel chrome)
     {
-        var row = new DockPanel { Background = Chrome, Height = 34, LastChildFill = true };
-        Place(row, Dock.Top);
+        titleBar = new DockPanel { Background = Chrome, Height = 34, LastChildFill = true };
+        var row = titleBar;
+        DockPanel.SetDock(row, Dock.Top);
+        chrome.Children.Add(row);
         row.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs args)
         {
             if (args.ClickCount == 2) ToggleMaximized();
@@ -176,11 +185,22 @@ sealed partial class Inkpad : Window
             button.Height = 28;
             controls.Children.Add(button);
         }
-        var logo = AppMark();
+        var identity = new StackPanel { Orientation = Orientation.Horizontal };
+        settingsBack = ActionButton(Symbol("M 10,3 L 5,8 L 10,13 M 5,8 H 14", 15), "Back to editor", 31, delegate { CloseSettings(); });
+        settingsBack.Visibility = Visibility.Collapsed;
+        identity.Children.Add(settingsBack);
+        var logo = new Image { Width = 22, Height = 22, Source = ReadAppIcon(), VerticalAlignment = VerticalAlignment.Center };
+        Icon = logo.Source;
         logo.Margin = new Thickness(13, 0, 5, 0);
-        DockPanel.SetDock(logo, Dock.Left);
-        row.Children.Add(logo);
+        identity.Children.Add(logo);
+        settingsTitle = Label("Inkpad", 13, Text);
+        settingsTitle.Margin = new Thickness(6, 0, 0, 0);
+        settingsTitle.Visibility = Visibility.Collapsed;
+        identity.Children.Add(settingsTitle);
+        DockPanel.SetDock(identity, Dock.Left);
+        row.Children.Add(identity);
         var tabStrip = new DockPanel { Margin = new Thickness(0, 4, 5, 0), VerticalAlignment = VerticalAlignment.Bottom, HorizontalAlignment = HorizontalAlignment.Left, Height = 30 };
+        titleTabs = tabStrip;
         row.Children.Add(tabStrip);
         var back = ActionButton(Symbol("M 10,3 L 5,8 L 10,13 Z", 11, Muted), "Scroll tabs left", 29, delegate { tabScroll.ScrollToHorizontalOffset(tabScroll.HorizontalOffset - 140); });
         var forward = ActionButton(Symbol("M 6,3 L 11,8 L 6,13 Z", 11, Muted), "Scroll tabs right", 29, delegate { tabScroll.ScrollToHorizontalOffset(tabScroll.HorizontalOffset + 140); });
@@ -205,37 +225,13 @@ sealed partial class Inkpad : Window
     void BuildToolbar()
     {
         var row = new Grid { Background = Surface, Height = 33 };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition());
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         Place(Rule(row, Surface), Dock.Top);
         var menu = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(7, 0, 0, 0) };
-        var file = new ContextMenu();
-        AddItem(file, "New tab", "Ctrl+N", delegate { AddNote(new Note()); });
-        AddItem(file, "Open…", "Ctrl+O", Open);
-        file.Items.Add(new Separator());
-        AddItem(file, "Save", "Ctrl+S", delegate { Save(current, false); });
-        AddItem(file, "Save as…", "Ctrl+Shift+S", delegate { Save(current, true); });
-        AddItem(file, "Export text only…", "", ExportText);
-        file.Items.Add(new Separator());
-        AddItem(file, "Close tab", "Ctrl+W", delegate { CloseNote(current); });
-        AddItem(file, "Exit", "", Close);
-        var edit = new ContextMenu();
-        AddItem(edit, "Undo", "Ctrl+Z", delegate { Undo(false); });
-        AddItem(edit, "Redo", "Ctrl+Y", delegate { Undo(true); });
-        edit.Items.Add(new Separator());
-        AddItem(edit, "Cut", "Ctrl+X", delegate { current.TextBox.Cut(); });
-        AddItem(edit, "Copy", "Ctrl+C", delegate { current.TextBox.Copy(); });
-        AddItem(edit, "Paste", "Ctrl+V", delegate { current.TextBox.Paste(); });
-        AddItem(edit, "Select all", "Ctrl+A", delegate { SetDrawing(false); current.TextBox.SelectAll(); });
-        edit.Items.Add(new Separator());
-        AddItem(edit, "Find…", "Ctrl+F", ShowFind);
-        var view = new ContextMenu();
-        var wrapping = AddItem(view, "Word wrap", "", delegate { wrap = !wrap; ResizePage(); });
-        wrapping.IsCheckable = wrapping.IsChecked = true;
-        view.Opened += delegate { wrapping.IsEnabled = current.PaperWidth == 0; wrapping.IsChecked = wrap; };
-        AddItem(view, "Zoom in", "Ctrl++", delegate { SetZoom(zoom + 10); });
-        AddItem(view, "Zoom out", "Ctrl+−", delegate { SetZoom(zoom - 10); });
-        AddItem(view, "Reset zoom", "Ctrl+0", delegate { SetZoom(100); });
         var names = new[] { "File", "Edit", "View" };
-        var groups = new[] { file, edit, view };
+        var groups = new[] { FileMenu(), EditMenu(), ViewMenu() };
         for (int index = 0; index < names.Length; index++)
         {
             var button = ActionButton("_" + names[index], names[index] + " menu", 49, null);
@@ -246,6 +242,8 @@ sealed partial class Inkpad : Window
         row.Children.Add(menu);
 
         var formatting = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
+        editorFormatting = formatting;
+        Grid.SetColumn(formatting, 1);
         row.Children.Add(formatting);
         var headings = ActionButton(WithChevron(Label("H1", 15, Text)), "Heading styles", 57, null);
         BuildHeadingMenu(headings);
@@ -254,6 +252,14 @@ sealed partial class Inkpad : Window
         AddItem(lists, "Bulleted list", "", ToggleBullet);
         AddItem(lists, "Numbered list", "", delegate { Format(EditingCommands.ToggleNumbering); });
         AddItem(lists, "Checklist", "Ctrl+Shift+L", StartChecklist);
+        lists.Items.Add(new Separator());
+        var indent = AddItem(lists, "Increase indent", "", delegate { Format(EditingCommands.IncreaseIndentation); });
+        var outdent = AddItem(lists, "Decrease indent", "", delegate { Format(EditingCommands.DecreaseIndentation); });
+        lists.Opened += delegate
+        {
+            indent.IsEnabled = EditingCommands.IncreaseIndentation.CanExecute(null, current.TextBox);
+            outdent.IsEnabled = EditingCommands.DecreaseIndentation.CanExecute(null, current.TextBox);
+        };
         AttachMenu(bullets, lists);
         var checkbox = BuildCheckboxToolbar();
         boldButton = ActionButton(new TextBlock { Text = "B", FontWeight = FontWeights.Bold, FontSize = 19 }, "Bold (Ctrl+B)", 40, delegate { Format(EditingCommands.ToggleBold); });
@@ -263,19 +269,20 @@ sealed partial class Inkpad : Window
         var table = ActionButton(WithChevron(Symbol("M 4,2 H 12 Q 14,2 14,4 V 12 Q 14,14 12,14 H 4 Q 2,14 2,12 V 4 Q 2,2 4,2 Z M 2,8 H 14 M 8,2 V 14", 19)), "Table", 56, null);
         BuildTableMenu(table);
         var clear = ActionButton(Symbol("M 1,11 L 4,3 L 7,11 M 2,8 H 6 M 10,4 V 6 M 8,5 Q 10,3 12,5 M 7,12 L 11,8 L 15,12 L 12,15 H 10 Z M 9,10 L 13,14", 20), "Clear formatting", 38, ClearFormatting);
-        foreach (var control in new UIElement[] { headings, bullets, checkbox, boldButton, italicButton, strikeButton, link, table, clear }) formatting.Children.Add(control);
+        foreach (var control in new UIElement[] { headings, bullets, checkbox, boldButton, italicButton, strikeButton, BuildHighlightButton(), link, table, clear }) formatting.Children.Add(control);
 
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 7, 0), VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
+        Grid.SetColumn(actions, 2);
         row.Children.Add(actions);
         drawButton = ActionButton(WithIcon(Pencil(), "Draw"), "Draw on the note (Ctrl+D)", 71, delegate { SetDrawing(!drawing); });
         actions.Children.Add(drawButton);
+        actions.Children.Add(BuildImageButton());
         actions.Children.Add(ActionButton(Symbol("M 3,2 H 11 L 14,5 V 14 H 2 V 2 H 3 M 5,2 V 6 H 11 V 2 M 5,14 V 9 H 11 V 14", 17), "Save (Ctrl+S)", 35, delegate { Save(current, false); }));
-        var settings = ActionButton(Symbol("M 7,1.4 H 9 L 9.5,3.2 L 11,4 L 12.8,3.5 L 14,5.3 L 12.7,6.8 V 8.5 L 14,10 L 12.8,11.8 L 11,11.3 L 9.5,12.1 L 9,14 H 7 L 6.5,12.1 L 5,11.3 L 3.2,11.8 L 2,10 L 3.3,8.5 V 6.8 L 2,5.3 L 3.2,3.5 L 5,4 L 6.5,3.2 Z M 10.2,7.7 A 2.2,2.2 0 1 1 5.8,7.7 A 2.2,2.2 0 1 1 10.2,7.7 Z", 19), "Settings", 36, null);
-        var settingsMenu = new ContextMenu();
-        var explorer = AddItem(settingsMenu, "Show Edit in Inkpad in File Explorer", "", ToggleExplorerMenu);
-        explorer.IsCheckable = true;
-        settingsMenu.Opened += delegate { explorer.IsChecked = InkpadWindows.ExplorerMenuEnabled(); };
-        AttachMenu(settings, settingsMenu);
+        var writing = ActionButton(WithChevron(Label("✧", 18, Text)), "Writing tools", 43, null);
+        AttachMenu(writing, WritingMenu());
+        writingButton = writing;
+        actions.Children.Add(writing);
+        var settings = ActionButton(Symbol("M 7,1.4 H 9 L 9.5,3.2 L 11,4 L 12.8,3.5 L 14,5.3 L 12.7,6.8 V 8.5 L 14,10 L 12.8,11.8 L 11,11.3 L 9.5,12.1 L 9,14 H 7 L 6.5,12.1 L 5,11.3 L 3.2,11.8 L 2,10 L 3.3,8.5 V 6.8 L 2,5.3 L 3.2,3.5 L 5,4 L 6.5,3.2 Z M 10.2,7.7 A 2.2,2.2 0 1 1 5.8,7.7 A 2.2,2.2 0 1 1 10.2,7.7 Z", 19), "Settings", 36, delegate { OpenSettings(); });
         actions.Children.Add(settings);
     }
 
@@ -355,7 +362,18 @@ sealed partial class Inkpad : Window
         row.Children.Add(ActionButton(Symbol("M 4,4 L 12,12 M 12,4 L 4,12", 14), "Close find (Esc)", 32, HideFind));
         findFeedback.Margin = new Thickness(8, 0, 0, 0);
         row.Children.Add(findFeedback);
-        findBar.Child = Rule(row, Surface);
+        var content = new StackPanel();
+        content.Children.Add(row);
+        replaceRow = new StackPanel { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed, Margin = new Thickness(13, 0, 12, 5) };
+        replaceBox.Width = 220;
+        replaceBox.Height = 26;
+        replaceBox.VerticalAlignment = VerticalAlignment.Center;
+        AutomationProperties.SetName(replaceBox, "Replace with");
+        replaceRow.Children.Add(replaceBox);
+        replaceRow.Children.Add(ActionButton("Replace", "Replace", 81, delegate { ReplaceText(false); }));
+        replaceRow.Children.Add(ActionButton("Replace all", "Replace all", 87, delegate { ReplaceText(true); }));
+        content.Children.Add(replaceRow);
+        findBar.Child = Rule(content, Surface);
         Place(findBar, Dock.Top);
     }
 
@@ -378,12 +396,15 @@ sealed partial class Inkpad : Window
         var area = new Grid();
         area.Children.Add(row);
         area.Children.Add(BuildSaveFeedback());
-        Place(new Border { Child = area, Background = Surface, BorderBrush = Line, BorderThickness = new Thickness(0, 1, 0, 0) }, Dock.Bottom);
+        editorStatus = new Border { Child = area, Background = Surface, BorderBrush = Line, BorderThickness = new Thickness(0, 1, 0, 0) };
+        Place(editorStatus, Dock.Bottom);
     }
 
     void AddNote(Note note)
     {
         notes.Add(note);
+        ApplyEditorPreferences(note);
+        AddMediaEditing(note);
         AddEditorMenu(note);
         note.PreviousInk = note.Ink.Strokes.ToArray();
         note.Ink.Strokes.StrokesChanged += delegate
@@ -410,6 +431,7 @@ sealed partial class Inkpad : Window
         if (note == current) return;
         if (current != null)
         {
+            if (markdownPreview != null) SetMarkdownPreview(false);
             shapeLayer.Cancel();
             current.ScrollX = pageScroll.HorizontalOffset;
             current.ScrollY = pageScroll.VerticalOffset;
@@ -608,7 +630,7 @@ sealed partial class Inkpad : Window
         if (current.CharacterCount == null) current.CharacterCount = current.PlainText.Replace("\r\n", "\n").Length;
         int count = current.CharacterCount.Value;
         characters.Text = count.ToString("N0", CultureInfo.CurrentCulture) + (count == 1 ? " character" : " characters");
-        fileMode.Text = drawing ? (shape.HasValue ? shape.Value.ToString() : erasing ? "Eraser" : "Pencil") : current.HasInk ? "Text + ink" : current.Formatted ? "Formatted" : "Plain text";
+        fileMode.Text = drawing ? (shape.HasValue ? shape.Value.ToString() : erasing ? "Eraser" : "Pencil") : current.HasInk ? "Text + ink" : current.Formatted ? "Formatted" : current.Markdown ? "Markdown" : "Plain text";
         bool inkFile = current.NeedsInkFile || (current.Path != null && NoteFiles.IsInkFile(current.Path));
         lineEnding.Text = inkFile ? "Inkpad note" : current.Newline == "\n" ? "Unix (LF)" : current.Newline == "\r" ? "Mac (CR)" : "Windows (CRLF)";
         encodingLabel.Text = inkFile ? "" : current.Encoding.CodePage == 65001 ? "UTF-8" : current.Encoding.WebName.ToUpperInvariant();
@@ -660,6 +682,7 @@ sealed partial class Inkpad : Window
 
     void ShowFind()
     {
+        if (markdownPreview != null) SetMarkdownPreview(false);
         if (drawing) SetDrawing(false);
         findBar.Visibility = Visibility.Visible;
         InkpadStyle.AnimateIn(findBar, -3, 125);
@@ -673,29 +696,17 @@ sealed partial class Inkpad : Window
     {
         if (findBar.Visibility != Visibility.Visible) return;
         findBar.Visibility = Visibility.Collapsed;
+        replaceRow.Visibility = Visibility.Collapsed;
         findFeedback.Text = "";
         if (!drawing) current.TextBox.Focus();
     }
 
     void FindNext()
     {
-        if (findBox.Text.Length == 0) return;
-        var editor = current.TextBox;
-        string all = current.PlainText;
-        int from = Math.Min(all.Length, new TextRange(editor.Document.ContentStart, editor.Selection.End).Text.Length);
-        int match = all.IndexOf(findBox.Text, from, StringComparison.CurrentCultureIgnoreCase);
-        if (match < 0 && from > 0) match = all.IndexOf(findBox.Text, StringComparison.CurrentCultureIgnoreCase);
-        findFeedback.Text = match < 0 ? "No matches" : "";
-        if (match < 0) return;
-        editor.Focus();
-        var start = TextLocation(editor.Document, match);
-        var end = TextLocation(editor.Document, match + findBox.Text.Length);
-        editor.Selection.Select(start, end);
-        var rectangle = start.GetCharacterRect(LogicalDirection.Forward);
-        if (!rectangle.IsEmpty) editor.BringIntoView(rectangle);
+        FindInDirection(false);
     }
 
-    static TextPointer TextLocation(FlowDocument document, int characters)
+    internal static TextPointer TextLocation(FlowDocument document, int characters)
     {
         TextPointer origin = document.ContentStart;
         int low = 0, high = origin.GetOffsetToPosition(document.ContentEnd);
@@ -711,7 +722,7 @@ sealed partial class Inkpad : Window
     void Open()
     {
         var dialog = new OpenFileDialog { Filter = "Notes and text files|*.inknote;*.txt;*.md;*.log;*.csv;*.json;*.ini|All files|*.*", Multiselect = true, Title = "Open notes" };
-        if (dialog.ShowDialog(this) == true) foreach (string path in dialog.FileNames) OpenPath(path);
+        if (dialog.ShowDialog(this) == true) OpenFiles(dialog.FileNames);
     }
 
     void OpenPath(string path)
@@ -725,6 +736,7 @@ sealed partial class Inkpad : Window
             NoteFiles.Load(loaded, path);
             if (notes.Count == 1 && current.Path == null && !current.Dirty) notes.Remove(current);
             AddNote(loaded);
+            RememberFile(path);
         }
         catch (Exception error) { FileError("open", error); }
     }
@@ -742,8 +754,8 @@ sealed partial class Inkpad : Window
         {
             var dialog = new SaveFileDialog
             {
-                Filter = useInk ? "Inkpad note (*.inknote)|*.inknote" : "Text document (*.txt)|*.txt|Inkpad note (*.inknote)|*.inknote",
-                DefaultExt = useInk ? ".inknote" : ".txt",
+                Filter = useInk ? "Inkpad note (*.inknote)|*.inknote" : note.Markdown ? "Markdown (*.md)|*.md|Text document (*.txt)|*.txt|Inkpad note (*.inknote)|*.inknote" : "Text document (*.txt)|*.txt|Inkpad note (*.inknote)|*.inknote|Markdown (*.md)|*.md",
+                DefaultExt = useInk ? ".inknote" : note.Markdown ? ".md" : ".txt",
                 FileName = path == null ? "Untitled" : System.IO.Path.GetFileNameWithoutExtension(path),
                 InitialDirectory = path == null ? null : System.IO.Path.GetDirectoryName(path),
                 Title = "Save as"
@@ -765,7 +777,9 @@ sealed partial class Inkpad : Window
         {
             NoteFiles.Save(note, path, false);
             note.Path = path;
+            note.Markdown = IsMarkdownPath(path);
             note.Dirty = false;
+            RememberFile(path);
             UpdateTabs();
             UpdateStatus();
             ShowSaveFeedback("Saved", path);
@@ -827,12 +841,26 @@ sealed partial class Inkpad : Window
         {
             if (!CanClose(note)) { args.Cancel = true; return; }
         }
+        if (Preferences.Restore)
+        {
+            Preferences.OpenFiles.Clear();
+            Preferences.OpenFiles.AddRange(notes.Where(note => note.Path != null).Select(note => note.Path));
+            Preferences.ActiveFile = current.Path;
+            Preferences.Save();
+        }
         InkpadWindows.SavePlacement(RestoreBounds, wasMaximized, windowPlacementPath);
     }
 
     void OnShortcut(object sender, KeyEventArgs args)
     {
         ModifierKeys modifiers = Keyboard.Modifiers;
+        if (settingsPage != null)
+        {
+            if (args.Key == Key.Escape) { CloseSettings(); args.Handled = true; }
+            return;
+        }
+        if (modifiers == (ModifierKeys.Control | ModifierKeys.Alt) && (args.Key == Key.S || (args.Key == Key.System && args.SystemKey == Key.S)))
+        { SaveAll(); args.Handled = true; return; }
         if (!drawing && current.TextBox.IsKeyboardFocusWithin && args.Key == Key.Enter &&
             modifiers == ModifierKeys.None && ContinueChecklist(current))
         {
@@ -863,12 +891,19 @@ sealed partial class Inkpad : Window
                     if (shift) InsertCheckbox();
                     else if (!ToggleCheckboxAtCaret()) return;
                     break;
-                case Key.N: AddNote(new Note()); break;
+                case Key.N: if (shift) NewWindow(null); else AddNote(new Note()); break;
                 case Key.O: Open(); break;
                 case Key.S: Save(current, shift); break;
-                case Key.W: CloseNote(current); break;
+                case Key.W: if (shift) Close(); else CloseNote(current); break;
                 case Key.D: SetDrawing(!drawing); break;
                 case Key.F: ShowFind(); break;
+                case Key.H: ShowReplace(); break;
+                case Key.G: GoToLine(); break;
+                case Key.E: ShowSpelling(); break;
+                case Key.P: Print(); break;
+                case Key.Q: if (!Preferences.Writing) return; WriteDraft(); break;
+                case Key.R: if (!Preferences.Writing) return; ApplyWritingTool("Rewrite"); break;
+                case Key.M: if (!Preferences.Writing) return; ApplyWritingTool("Summarize"); break;
                 case Key.Tab: ShowNote(notes[(notes.IndexOf(current) + (shift ? notes.Count - 1 : 1)) % notes.Count]); break;
                 case Key.Z: if (findBox.IsKeyboardFocused || !drawing) return; Undo(shift); break;
                 case Key.Y: if (findBox.IsKeyboardFocused || !drawing) return; Undo(true); break;
@@ -886,7 +921,8 @@ sealed partial class Inkpad : Window
                 default: return;
             }
         }
-        else if (args.Key == Key.F3) { if (findBar.Visibility == Visibility.Visible) FindNext(); else ShowFind(); }
+        else if (args.Key == Key.F3) FindInDirection(modifiers == ModifierKeys.Shift);
+        else if (args.Key == Key.F5 && modifiers == ModifierKeys.None) InsertDate();
         else return;
         args.Handled = true;
     }
@@ -978,13 +1014,7 @@ sealed partial class Inkpad : Window
         return new Viewbox { Width = size, Height = size, Child = grid, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
     }
 
-    static Grid AppMark()
-    {
-        var mark = new Grid { Width = 25, Height = 25, VerticalAlignment = VerticalAlignment.Center };
-        mark.Children.Add(new Border { Background = Brush("#B9E4F1"), CornerRadius = new CornerRadius(3), Width = 19, Height = 21, BorderBrush = Brush("#53ACC6"), BorderThickness = new Thickness(1) });
-        mark.Children.Add(new System.Windows.Shapes.Path { Data = Geometry.Parse("M 7,3 V 6 M 12,3 V 6 M 17,3 V 6 M 7,10 H 18 M 7,13 H 18 M 7,16 H 15 M 7,19 H 12"), Stroke = Brush("#207F9D"), StrokeThickness = 1.4, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round });
-        return mark;
-    }
+    static bool IsMarkdownPath(string path) { return string.Equals(Path.GetExtension(path), ".md", StringComparison.OrdinalIgnoreCase); }
 
     static Color ColorOf(string hex) { return (Color)ColorConverter.ConvertFromString(hex); }
 

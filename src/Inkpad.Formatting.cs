@@ -10,7 +10,7 @@ using System.Windows.Media;
 
 sealed partial class Inkpad
 {
-    const int TableGridSize = 8;
+    const int TableGridSize = 5;
 
     void BuildTableMenu(Button button)
     {
@@ -24,18 +24,17 @@ sealed partial class Inkpad
         AddTableActions(menu);
         AttachMenu(button, menu, delegate
         {
-            if (NoteTables.Ancestor<TableCell>(current.TextBox.CaretPosition) != null) return true;
-            OpenTableGrid(button);
+            OpenTableGrid(button, menu);
             return false;
         });
     }
 
-    void OpenTableGrid(Button owner)
+    void OpenTableGrid(Button owner, ContextMenu editMenu = null)
     {
         var popup = new Popup { PlacementTarget = owner, Placement = PlacementMode.Bottom,
             StaysOpen = false, AllowsTransparency = true, HorizontalOffset = -3 };
         var contents = new StackPanel { Margin = new Thickness(10, 7, 10, 10) };
-        var label = Label("Insert table", 14, Text);
+        var label = Label("Insert table", 14, Muted);
         label.Margin = new Thickness(2, 0, 0, 8);
         contents.Children.Add(label);
         var grid = new UniformGrid { Rows = TableGridSize, Columns = TableGridSize };
@@ -48,28 +47,52 @@ sealed partial class Inkpad
             for (int x = 0; x < TableGridSize; x++)
             {
                 bool selected = y < rows && x < columns;
-                cells[y, x].Background = selected ? PaleBlue : Brushes.White;
-                cells[y, x].BorderBrush = selected ? Brush("#7AA8D6") : Brush("#D8D8D8");
+                cells[y, x].Background = selected ? PaleBlue : SettingsField;
+                cells[y, x].BorderBrush = selected ? Brush("#7AA8D6") : Brush("#929292");
             }
         };
         for (int y = 0; y < TableGridSize; y++)
         for (int x = 0; x < TableGridSize; x++)
         {
             int rows = y + 1, columns = x + 1;
-            var cell = ActionButton(null, columns + " columns, " + rows + " rows", 22, delegate
+            var cell = ActionButton(null, columns + " columns, " + rows + " rows", 31, delegate
             {
                 popup.IsOpen = false;
                 InsertTable(rows, columns);
             });
             cell.ToolTip = null;
-            cell.Height = 22;
+            cell.Height = 31;
             cell.Margin = new Thickness(2);
             cell.MouseEnter += delegate { highlight(rows, columns); };
             cell.GotKeyboardFocus += delegate { highlight(rows, columns); };
             cells[y, x] = cell;
             grid.Children.Add(cell);
         }
-        highlight(1, 1);
+        highlight(0, 0);
+        label.Text = "Insert table";
+        contents.Children.Add(new Border { Height = 1, Background = Line, Margin = new Thickness(0, 8, 0, 4) });
+        var custom = ActionButton("Insert table…", "Insert table with custom dimensions", double.NaN, delegate
+        {
+            popup.IsOpen = false;
+            string dimensions = AskText("Insert table", "Enter rows × columns, from 1 to 30 for each.", "3 × 3");
+            if (dimensions == null) return;
+            var values = dimensions.Split('×', 'x', 'X');
+            int rows, columns;
+            if (values.Length != 2 || !int.TryParse(values[0], out rows) || !int.TryParse(values[1], out columns) || rows < 1 || rows > 30 || columns < 1 || columns > 30)
+                ShowNoteDialog("Insert table", "Enter two numbers from 1 to 30, such as 3 × 4.", "OK", null);
+            else InsertTable(rows, columns);
+        });
+        contents.Children.Add(custom);
+        if (editMenu != null)
+        {
+            var edit = ActionButton("Edit table  ›", "Edit table", double.NaN, delegate
+            {
+                popup.IsOpen = false;
+                editMenu.IsOpen = true;
+            });
+            edit.IsEnabled = NoteTables.Ancestor<TableCell>(current.TextBox.CaretPosition) != null;
+            contents.Children.Add(edit);
+        }
         var frame = new Border { Child = contents, Background = InkpadStyle.PopupBackground,
             BorderBrush = InkpadStyle.PopupBorder, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), Margin = new Thickness(3, 2, 7, 8),
             Effect = new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 10, ShadowDepth = 2, Opacity = .16 } };
@@ -79,7 +102,7 @@ sealed partial class Inkpad
         };
         KeyboardNavigation.SetDirectionalNavigation(grid, KeyboardNavigationMode.Cycle);
         popup.Child = frame;
-        popup.Opened += delegate { owner.Background = Brush("#EAEAEA"); InkpadStyle.AnimateIn(frame, -3); cells[0, 0].Focus(); };
+        popup.Opened += delegate { owner.Background = SettingsField; InkpadStyle.AnimateIn(frame, -3); };
         popup.Closed += delegate { owner.Background = Brushes.Transparent; };
         popup.IsOpen = true;
     }
