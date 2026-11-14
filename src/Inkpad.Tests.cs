@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Ink;
 using System.Windows.Input;
@@ -223,6 +224,7 @@ static class InkpadTests
         TestCheckboxColors(directory, editor, note, root);
         TestTabIndicators(directory, editor, note, root);
         TestSettingsAndEditing(directory, editor, note, root);
+        TestInkTools(directory, editor, note, root);
         Require(note.TextBox.ActualHeight > 400 && note.Ink.ActualHeight == note.TextBox.ActualHeight, "Editor and ink layer share a full-height page");
         Require(!note.Ink.IsHitTestVisible, "Typing mode permits text input");
         note.SetPlainText(string.Join("\n", Enumerable.Repeat("A line in a long note", 240)));
@@ -336,11 +338,108 @@ static class InkpadTests
         var right = Inkpad.ReplaceBitmap(note, figure, wrapBitmap, 170, FigureHorizontalAnchor.ContentRight);
         Layout(root);
         Require(right.TranslatePoint(new Point(), note.TextBox).X > origin.X + 150, "Reflow text when the image moves to the right");
+        Call(editor, "SelectImage", note, right);
+        Layout(root);
+        Call(editor, "PositionImageOverlay");
+        Layout(root);
+        var handles = (Thumb[])Field(editor, "imageHandles");
+        var overlay = (Canvas)Field(editor, "imageOverlay");
+        var bottomRight = handles[4].TranslatePoint(new Point(8, 8), overlay);
+        var hit = VisualTreeHelper.HitTest(overlay, bottomRight);
+        var target = hit == null ? null : hit.VisualHit;
+        while (target != null && !(target is Thumb)) target = VisualTreeHelper.GetParent(target) as Visual;
+        Require(overlay.Visibility == Visibility.Visible && handles.All(handle => handle.Visibility == Visibility.Visible && handle.ActualWidth > 0) &&
+            ReferenceEquals(target, handles[4]), "Display eight interactive image handles above the editor");
+        Call(editor, "StartImageHandle", bottomRight);
+        Call(editor, "MoveImageHandle", 4, bottomRight + new Vector(85, 51));
+        Call(editor, "FinishImageHandle", false);
+        Layout(root);
+        var resized = (Image)Field(editor, "activeImage");
+        Require(Math.Abs(resized.Width - 255) < 1 && Math.Abs(resized.Height - 153) < 1 &&
+            ((Figure)((BlockUIContainer)resized.Parent).Parent).HorizontalAnchor == FigureHorizontalAnchor.ContentRight,
+            "Drag to resize the selected image proportionally and preserve wrapping");
+        Call(editor, "StartImageCrop");
+        Call(editor, "StartImageHandle", new Point(0, 0));
+        Call(editor, "MoveImageHandle", 0, new Point(25.5, 25.5));
+        Call(editor, "FinishImageHandle", false);
+        Call(editor, "StopImageCrop");
+        Require(ReferenceEquals(resized, Field(editor, "activeImage")), "Cancel an inline crop without changing the image");
+        Call(editor, "StartImageCrop");
+        Call(editor, "StartImageHandle", new Point(0, 0));
+        Call(editor, "MoveImageHandle", 0, new Point(25.5, 25.5));
+        Call(editor, "FinishImageHandle", false);
+        Call(editor, "CommitImageCrop");
+        var cropped = (BitmapSource)((Image)Field(editor, "activeImage")).Source;
+        string cropPath = Path.Combine(directory, "crop-handles.inknote");
+        NoteFiles.Save(note, cropPath, false);
+        var reloaded = new Note();
+        NoteFiles.Load(reloaded, cropPath);
+        var reloadedImage = NoteFiles.DocumentImages(reloaded.TextBox.Document.Blocks).Single();
+        Require(cropped.PixelWidth == 180 && cropped.PixelHeight == 100 &&
+            ((BitmapSource)reloadedImage.Source).PixelHeight == 100 && reloaded.PlainText == note.PlainText,
+            "Apply a crop in the editor and reopen the cropped image with its surrounding text");
         note.SetPlainText("");
         note.Formatted = false;
         note.Dirty = false;
         Call(editor, "UpdateTabs");
         Call(editor, "UpdateStatus");
+        Layout(root);
+    }
+
+    static void TestInkTools(string directory, Inkpad editor, Note note, FrameworkElement root)
+    {
+        note.SetPlainText("Highlight this, leave this alone.");
+        Call(editor, "SetDrawing", true);
+        var options = (Button)Field(editor, "markerOptions");
+        options.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, options));
+        var popup = (Popup)Field(editor, "inkPicker");
+        var panel = (FrameworkElement)popup.Child;
+        panel.Measure(new Size(500, 500));
+        panel.Arrange(new Rect(panel.DesiredSize));
+        panel.UpdateLayout();
+        var tools = Descendants(panel).ToArray();
+        var slider = tools.OfType<Slider>().Single();
+        Require(slider.Template.FindName("PART_Track", slider) is Track, "Render an interactive thickness slider in the highlighter palette");
+        slider.Value = 24;
+        var green = tools.OfType<Button>().Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Color #70EB4F");
+        green.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, green));
+        var attr = note.Ink.DefaultDrawingAttributes;
+        Require(attr.IsHighlighter && attr.StylusTip == StylusTip.Rectangle && attr.Height == 24 &&
+            attr.Color == Color.FromRgb(112, 235, 79), "Apply the highlighter palette and slider to freehand ink");
+        note.Ink.Strokes.Add(new Stroke(new StylusPointCollection { new StylusPoint(24, 25), new StylusPoint(150, 25) }, attr));
+        string path = Path.Combine(directory, "highlighter.inknote");
+        NoteFiles.Save(note, path, false);
+        var reloaded = new Note();
+        NoteFiles.Load(reloaded, path);
+        Require(reloaded.Ink.Strokes[0].DrawingAttributes.IsHighlighter &&
+            reloaded.Ink.Strokes[0].DrawingAttributes.Height == 24, "Keep freehand highlighter strokes after saving and reopening");
+        var toggle = tools.OfType<ToggleButton>().Single(button => System.Windows.Automation.AutomationProperties.GetName(button) == "Text only highlight");
+        toggle.IsChecked = true;
+        toggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, toggle));
+        Require(!note.Ink.IsHitTestVisible && note.Ink.EditingMode == InkCanvasEditingMode.None,
+            "Text-only highlighter sends drag input to the editor instead of drawing ink");
+        popup.IsOpen = false;
+        var start = ((Paragraph)note.TextBox.Document.Blocks.FirstBlock).Inlines.FirstInline.ContentStart;
+        note.TextBox.Selection.Select(start, start.GetPositionAtOffset(14));
+        Call(editor, "PaintSelectedText", note);
+        var runs = ((Paragraph)note.TextBox.Document.Blocks.FirstBlock).Inlines.OfType<Run>().ToArray();
+        Require(runs[0].Text == "Highlight this" && runs[0].Background is SolidColorBrush &&
+            ((SolidColorBrush)runs[0].Background).Color == Color.FromArgb(126, 112, 235, 79) &&
+            !(runs[1].Background is SolidColorBrush) && note.Ink.Strokes.Count == 1,
+            "Paint only the chosen words without adding ink or highlighting the rest of the line");
+        Call(editor, "Undo", false);
+        Require(!((Paragraph)note.TextBox.Document.Blocks.FirstBlock).Inlines.OfType<Run>().Any(run => run.Background is SolidColorBrush),
+            "Undo the text highlight without touching the freehand stroke");
+        Call(editor, "ActivateInkTool", false);
+        Require(!note.Ink.DefaultDrawingAttributes.IsHighlighter && note.Ink.DefaultDrawingAttributes.Width == 2.8,
+            "Switching to pencil restores its own thickness and solid stroke");
+        note.Ink.Strokes.Clear();
+        note.PaperWidth = 0;
+        note.UndoInk.Clear();
+        note.RedoInk.Clear();
+        Call(editor, "SetDrawing", false);
+        note.SetPlainText("");
+        note.Dirty = false;
         Layout(root);
     }
 

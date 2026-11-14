@@ -21,9 +21,12 @@ sealed partial class Inkpad
 
     void BuildImageBar()
     {
+        BuildImageOverlay();
         var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(12, 1, 0, 1) };
-        row.Children.Add(ActionButton("Resize…", "Resize selected image", 76, delegate { EditActiveImage(ResizeBitmap); }));
-        row.Children.Add(ActionButton("Crop…", "Crop selected image", 69, delegate { EditActiveImage(CropBitmap); }));
+        var resize = ActionButton(WithIcon(Symbol("M 2,7 V 2 H 7 M 2,2 L 7,7 M 9,14 H 14 V 9 M 14,14 L 9,9", 15), "Resize"), "Resize selected image", 76, delegate { EditActiveImage(ResizeBitmap); });
+        var crop = ActionButton(WithIcon(Symbol(CropIcon, 16), "Crop"), "Crop selected image", 70, StartImageCrop);
+        row.Children.Add(resize);
+        row.Children.Add(crop);
         var layout = ActionButton(WithChevron(Label("Wrap", 13, Text)), "Image wrap and placement", 83, null);
         var menu = new ContextMenu();
         AddItem(menu, "Wrap left", "", delegate { AlignImage(FigureHorizontalAnchor.ContentLeft, WrapDirection.Both); });
@@ -35,7 +38,11 @@ sealed partial class Inkpad
         row.Children.Add(ActionButton("Copy", "Copy selected image", 60, delegate { if (activeImage != null) CopyBitmap(activeImage); }));
         row.Children.Add(ActionButton("Delete", "Delete selected image", 66, DeleteActiveImage));
         row.Children.Add(ActionButton("Done", "Finish editing image", 60, delegate { SelectImage(null, null); if (current != null) current.TextBox.Focus(); }));
-        imageBar.Child = Rule(row, Surface);
+        normalImageTools = row;
+        var tools = new Grid();
+        tools.Children.Add(row);
+        tools.Children.Add(BuildCropTools());
+        imageBar.Child = Rule(tools, Surface);
         Place(imageBar, Dock.Top);
     }
 
@@ -53,11 +60,12 @@ sealed partial class Inkpad
 
     void SelectImage(Note note, Image image)
     {
-        if (activeImage != null) activeImage.Opacity = 1;
+        if (image != activeImage) StopImageCrop();
+        imageResize = null;
         activeImage = image;
         imageNote = note;
-        if (image != null) image.Opacity = .84;
         UpdateImageBar();
+        PositionImageOverlay();
     }
 
     static TextElement ImageContainer(Image image)
@@ -98,21 +106,8 @@ sealed partial class Inkpad
     }
     Button BuildHighlightButton()
     {
-        var button = ActionButton(WithChevron(Symbol("M 3,11 L 10,3 L 13,6 L 6,13 H 3 Z M 2,15 H 14 M 5,9 L 8,12", 18)), "Text highlight color", 43, null);
-        var menu = new ContextMenu();
-        foreach (var preset in new[] { "#FFF09B", "#BFF1C9", "#C7E7FF", "#FBD4E2" })
-        {
-            string color = preset;
-            var item = AddItem(menu, color, "", delegate { HighlightText(Brush(color)); });
-            item.Icon = new Border { Width = 13, Height = 13, Background = Brush(color), CornerRadius = new CornerRadius(2) };
-        }
-        AddItem(menu, "More colors…", "", delegate { Dispatcher.BeginInvoke(new Action(delegate
-        {
-            var color = PickColor(ColorOf("#FFF09B"));
-            if (color.HasValue) HighlightText(new SolidColorBrush(color.Value));
-        })); });
-        AddItem(menu, "Remove highlight", "", delegate { HighlightText(Brushes.Transparent); });
-        AttachMenu(button, menu);
+        var button = ActionButton(WithChevron(Symbol(MarkerIcon, 18)), "Text highlight color", 43, null);
+        button.Click += delegate { OpenInkPicker(button, true, true); };
         return button;
     }
 
@@ -131,11 +126,17 @@ sealed partial class Inkpad
             start = line;
             end = next != null && next.Paragraph == line.Paragraph ? next : line.Paragraph.ContentEnd;
         }
-        if (start.CompareTo(end) == 0) return;
-        current.Formatted = true;
-        new TextRange(start, end).ApplyPropertyValue(TextElement.BackgroundProperty, color);
-        MarkDirty(current);
+        ApplyTextHighlight(current, start, end, color);
         editor.Focus();
+    }
+
+    void ApplyTextHighlight(Note note, TextPointer start, TextPointer end, Brush color)
+    {
+        if (start.CompareTo(end) == 0) return;
+        note.Formatted = true;
+        new TextRange(start, end).ApplyPropertyValue(TextElement.BackgroundProperty, color);
+        MarkDirty(note);
+        if (note == current) UpdateStatus();
     }
 
     Button BuildImageButton()
@@ -169,6 +170,14 @@ sealed partial class Inkpad
     void AddMediaEditing(Note note)
     {
         var editor = note.TextBox;
+        editor.AddHandler(Mouse.QueryCursorEvent, new QueryCursorEventHandler(delegate(object sender, QueryCursorEventArgs args)
+        {
+            if (note == current && TextHighlightActive)
+            {
+                args.Cursor = Cursors.IBeam;
+                args.Handled = true;
+            }
+        }), true);
         DataObject.AddPastingHandler(editor, delegate(object sender, DataObjectPastingEventArgs args)
         {
             try
@@ -187,12 +196,19 @@ sealed partial class Inkpad
         editor.AddHandler(UIElement.PreviewMouseDownEvent, new MouseButtonEventHandler(delegate(object sender, MouseButtonEventArgs args)
         {
             var point = args.GetPosition(editor);
+            if (args.ChangedButton == MouseButton.Left && BeginTextHighlight(note, point)) { args.Handled = true; return; }
+            if (imageCrop.HasValue) StopImageCrop();
             var image = ImageAt(editor, point);
             if (image == null) { if (imageNote == note) SelectImage(null, null); return; }
             var container = ImageContainer(image);
             args.Handled = true;
             editor.Focus();
-            if (args.ChangedButton == MouseButton.Left) { imageDragStart = point; editor.CaptureMouse(); }
+            if (args.ChangedButton == MouseButton.Left)
+            {
+                SelectImage(note, image);
+                imageDragStart = args.GetPosition(this);
+                editor.CaptureMouse();
+            }
             else if (args.ChangedButton == MouseButton.Right)
             {
                 SelectImage(note, image);
@@ -201,14 +217,16 @@ sealed partial class Inkpad
         }), true);
         editor.PreviewMouseUp += delegate(object sender, MouseButtonEventArgs args)
         {
+            if (args.ChangedButton == MouseButton.Left && EndTextHighlight(note, args.GetPosition(editor))) { args.Handled = true; return; }
             if (args.ChangedButton != MouseButton.Left || !imageDragStart.HasValue) return;
             var start = imageDragStart.Value;
             imageDragStart = null;
             var point = args.GetPosition(editor);
-            var image = ImageAt(editor, start);
+            var image = imageNote == note ? activeImage : null;
             if (editor.IsMouseCaptured) editor.ReleaseMouseCapture();
             if (image == null) return;
-            if (Math.Abs(point.X - start.X) > SystemParameters.MinimumHorizontalDragDistance || Math.Abs(point.Y - start.Y) > SystemParameters.MinimumVerticalDragDistance)
+            var movement = args.GetPosition(this) - start;
+            if (Math.Abs(movement.X) > SystemParameters.MinimumHorizontalDragDistance || Math.Abs(movement.Y) > SystemParameters.MinimumVerticalDragDistance)
             {
                 var target = editor.GetPositionFromPoint(point, true);
                 var anchor = point.X < editor.ActualWidth / 3 ? FigureHorizontalAnchor.ContentLeft :
@@ -220,7 +238,13 @@ sealed partial class Inkpad
             SelectImage(note, image);
             args.Handled = true;
         };
-        editor.LostMouseCapture += delegate { imageDragStart = null; };
+        editor.PreviewMouseMove += delegate(object sender, MouseEventArgs args)
+        {
+            if (highlightAnchor == null) return;
+            DragTextHighlight(note, args.GetPosition(editor));
+            args.Handled = true;
+        };
+        editor.LostMouseCapture += delegate { imageDragStart = null; highlightAnchor = null; };
         editor.SelectionChanged += delegate { if (imageNote == note) SelectImage(null, null); };
         editor.TextChanged += delegate { if (imageNote == note) UpdateImageBar(); };
         editor.PreviewKeyDown += delegate(object sender, KeyEventArgs args)
@@ -322,7 +346,7 @@ sealed partial class Inkpad
         var menu = new ContextMenu { PlacementTarget = note.TextBox, Placement = PlacementMode.MousePoint };
         AddItem(menu, "Copy image", "Ctrl+C", delegate { CopyBitmap(image); });
         AddItem(menu, "Resize…", "", delegate { Dispatcher.BeginInvoke(new Action(delegate { ResizeBitmap(note, image, container); })); });
-        AddItem(menu, "Crop…", "", delegate { Dispatcher.BeginInvoke(new Action(delegate { CropBitmap(note, image, container); })); });
+        AddItem(menu, "Crop", "", delegate { Dispatcher.BeginInvoke(new Action(StartImageCrop)); });
         menu.Items.Add(new Separator());
         AddItem(menu, "Delete image", "Del", DeleteActiveImage);
         InkpadStyle.Apply(menu);
@@ -344,49 +368,6 @@ sealed partial class Inkpad
         if (!double.TryParse(value, out width) || double.IsNaN(width) || width < 12 || width > 10000)
         { ShowNoteDialog("Resize image", "Enter a width from 12 to 10,000 pixels.", "OK", null); return; }
         SelectImage(note, ReplaceBitmap(note, container, (BitmapSource)image.Source, width));
-    }
-
-    void CropBitmap(Note note, Image image, TextElement container)
-    {
-        var bitmap = (BitmapSource)image.Source;
-        var dialog = new Window { Owner = this, Title = "Crop image", Width = 570, SizeToContent = SizeToContent.Height,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false, Background = SettingsBackground };
-        double scale = Math.Min(1, Math.Min(520.0 / bitmap.PixelWidth, 380.0 / bitmap.PixelHeight));
-        var surface = new Canvas { Width = bitmap.PixelWidth * scale, Height = bitmap.PixelHeight * scale, ClipToBounds = true, Cursor = Cursors.Cross, HorizontalAlignment = HorizontalAlignment.Center, Background = Brushes.Transparent };
-        surface.Children.Add(new Image { Source = bitmap, Width = surface.Width, Height = surface.Height, Stretch = Stretch.Fill, IsHitTestVisible = false });
-        var outline = new Border { BorderBrush = Brushes.DeepSkyBlue, BorderThickness = new Thickness(2), Background = Brush("#330077CC"), IsHitTestVisible = false };
-        surface.Children.Add(outline);
-        Point origin = new Point();
-        var selection = Rect.Empty;
-        var content = new StackPanel { Margin = new Thickness(16) };
-        content.Children.Add(new TextBlock { Text = "Drag over the area you want to keep.", Foreground = Text, Margin = new Thickness(0, 0, 0, 10) });
-        content.Children.Add(surface);
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
-        var crop = SettingsButton("Crop", delegate { dialog.DialogResult = true; });
-        crop.IsEnabled = false;
-        crop.IsDefault = true;
-        var cancel = SettingsButton("Cancel", null); cancel.IsCancel = true; cancel.Margin = new Thickness(6, 0, 0, 0);
-        actions.Children.Add(crop); actions.Children.Add(cancel); content.Children.Add(actions);
-        surface.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs args) { origin = args.GetPosition(surface); surface.CaptureMouse(); };
-        surface.MouseMove += delegate(object sender, MouseEventArgs args)
-        {
-            if (!surface.IsMouseCaptured) return;
-            var at = args.GetPosition(surface);
-            at = new Point(Math.Max(0, Math.Min(surface.Width, at.X)), Math.Max(0, Math.Min(surface.Height, at.Y)));
-            selection = new Rect(origin, at);
-            Canvas.SetLeft(outline, selection.X); Canvas.SetTop(outline, selection.Y);
-            outline.Width = selection.Width; outline.Height = selection.Height;
-            crop.IsEnabled = selection.Width >= 2 && selection.Height >= 2;
-        };
-        surface.MouseLeftButtonUp += delegate { surface.ReleaseMouseCapture(); };
-        dialog.Content = content;
-        if (dialog.ShowDialog() != true || selection.IsEmpty) return;
-        int x = (int)(selection.X / scale), y = (int)(selection.Y / scale);
-        int width = Math.Min(bitmap.PixelWidth - x, Math.Max(1, (int)Math.Ceiling(selection.Width / scale)));
-        int height = Math.Min(bitmap.PixelHeight - y, Math.Max(1, (int)Math.Ceiling(selection.Height / scale)));
-        if (width <= 0 || height <= 0) return;
-        var cropped = new CroppedBitmap(bitmap, new Int32Rect(x, y, width, height));
-        SelectImage(note, ReplaceBitmap(note, container, cropped, Math.Max(12, image.Width * width / bitmap.PixelWidth)));
     }
 
     internal static Image ReplaceBitmap(Note note, TextElement container, BitmapSource bitmap, double width,

@@ -19,16 +19,13 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyTitle("Inkpad")]
 [assembly: System.Reflection.AssemblyDescription("Offline text and drawing editor for Windows")]
 [assembly: System.Reflection.AssemblyProduct("Inkpad")]
-[assembly: System.Reflection.AssemblyVersion("1.8.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.9.0.0")]
 
 sealed partial class Inkpad : Window
 {
     static readonly Brush Chrome = new SolidColorBrush(ColorOf("#E7E7E7")), Surface = new SolidColorBrush(ColorOf("#F6F6F6")), Paper = new SolidColorBrush(ColorOf("#F6F6F6")),
         Line = new SolidColorBrush(ColorOf("#E4E4E4")), Text = new SolidColorBrush(ColorOf("#191919")), Muted = new SolidColorBrush(ColorOf("#5C5C5C")),
         Blue = Brush("#124C86"), PaleBlue = new SolidColorBrush(ColorOf("#DCEBFA"));
-    static readonly Color[] InkColors = { ColorOf("#202020"), ColorOf("#175CB8"), ColorOf("#BF293D"), ColorOf("#08795D") };
-    static readonly string[] InkColorNames = { "Black", "Blue", "Red", "Green" };
-    static readonly double[] InkSizes = { 1.5, 2.8, 5, 9 };
     static readonly string[] ShapePaths = { "M 3,13 L 13,3", "M 3,13 L 13,3 M 7,3 H 13 V 9", "M 2.5,4 H 13.5 V 12 H 2.5 Z", "M 14,8 A 6,4.5 0 1 1 2,8 A 6,4.5 0 1 1 14,8 Z", "M 8,2.5 L 14,13 H 2 Z" };
 
     readonly List<Note> notes = new List<Note>();
@@ -47,13 +44,11 @@ sealed partial class Inkpad : Window
     readonly ScaleTransform pageScale = new ScaleTransform(1, 1);
     readonly ShapeLayer shapeLayer = new ShapeLayer();
     Button drawButton, penButton, eraserButton, shapesButton, undoInkButton, redoInkButton, boldButton, italicButton, strikeButton;
-    Button[] colorButtons;
     Grid page;
     Note current;
     bool drawing, erasing, wrap = true;
     ShapeTool? shape;
-    int colorIndex, zoom = 100;
-    double inkSize = 2.8;
+    int zoom = 100;
     bool wasMaximized;
     readonly string windowPlacementPath;
 
@@ -295,7 +290,9 @@ sealed partial class Inkpad : Window
         var row = new StackPanel { Orientation = Orientation.Horizontal, Height = 39, Margin = new Thickness(14, 0, 10, 0) };
         drawingBar.Child = row;
         Place(drawingBar, Dock.Top);
-        penButton = ActionButton(WithIcon(Pencil(), "Pencil"), "Pencil", 78, delegate { erasing = false; shape = null; ApplyDrawingMode(); });
+        AddInkTool(row, false);
+        AddInkTool(row, true);
+        row.Children.Add(Divider(7));
         eraserButton = ActionButton(WithIcon(Symbol("M 2,9 L 8,3 Q 9,2 10,3 L 14,7 Q 15,8 14,9 L 9,14 H 6 Z M 5,6 L 12,12 M 9,14 H 15", 16), "Eraser"), "Erase a stroke", 81, delegate { erasing = true; shape = null; ApplyDrawingMode(); });
         shapesButton = ActionButton(null, "Shapes. Hold Shift while dragging to constrain the shape.", 105, null);
         var shapes = new ContextMenu { MinWidth = 164, Padding = new Thickness(3) };
@@ -308,38 +305,9 @@ sealed partial class Inkpad : Window
             shapes.Opened += delegate { entry.IsChecked = shape == selected; };
         }
         AttachMenu(shapesButton, shapes);
-        row.Children.Add(penButton);
         row.Children.Add(eraserButton);
         row.Children.Add(shapesButton);
-        row.Children.Add(Divider(8));
-        colorButtons = new Button[InkColors.Length];
-        for (int index = 0; index < colorButtons.Length; index++)
-        {
-            int value = index;
-            var swatch = new Border { Width = 15, Height = 15, CornerRadius = new CornerRadius(8), Background = new SolidColorBrush(InkColors[index]) };
-            colorButtons[index] = ActionButton(swatch, InkColorNames[index] + " ink", 32, delegate { colorIndex = value; erasing = false; ApplyDrawingMode(); });
-            row.Children.Add(colorButtons[index]);
-        }
-        var size = ActionButton(WithChevron(Label("Medium", 13, Text)), "Stroke thickness", 86, null);
-        size.Margin = new Thickness(8, 0, 0, 0);
-        var sizes = new ContextMenu();
-        string[] sizeNames = { "Fine", "Medium", "Thick", "Wide" };
-        for (int index = 0; index < sizeNames.Length; index++)
-        {
-            int thickness = index;
-            var item = AddItem(sizes, sizeNames[index], "", delegate
-            {
-                inkSize = InkSizes[thickness];
-                size.Content = WithChevron(Label(sizeNames[thickness], 13, Text));
-                erasing = false;
-                ApplyDrawingMode();
-            });
-            item.IsCheckable = true;
-            sizes.Opened += delegate { item.IsChecked = inkSize == InkSizes[thickness]; };
-        }
-        AttachMenu(size, sizes);
-        row.Children.Add(size);
-        row.Children.Add(Divider(9));
+        row.Children.Add(Divider(7));
         undoInkButton = ActionButton(Symbol("M 6,3 L 2,7 L 6,11 M 2,7 H 10 Q 15,7 14,13", 17), "Undo ink (Ctrl+Z)", 35, delegate { Undo(false); });
         redoInkButton = ActionButton(Symbol("M 10,3 L 14,7 L 10,11 M 14,7 H 6 Q 1,7 2,13", 17), "Redo ink (Ctrl+Y)", 35, delegate { Undo(true); });
         row.Children.Add(undoInkButton);
@@ -436,6 +404,8 @@ sealed partial class Inkpad : Window
             shapeLayer.Cancel();
             current.ScrollX = pageScroll.HorizontalOffset;
             current.ScrollY = pageScroll.VerticalOffset;
+            CloseInkPicker();
+            SelectImage(null, null);
             page.Children.Clear();
         }
         current = note;
@@ -446,6 +416,8 @@ sealed partial class Inkpad : Window
         page.Children.Add(note.TextBox);
         page.Children.Add(note.Ink);
         page.Children.Add(shapeLayer);
+        page.Children.Add(imageOverlay);
+        page.LayoutUpdated += delegate { if (imageNote == current) PositionImageOverlay(); };
         pageScroll.Content = page;
         ResizePage();
         pageScroll.ScrollToHorizontalOffset(note.ScrollX);
@@ -533,6 +505,8 @@ sealed partial class Inkpad : Window
 
     void SetDrawing(bool enabled)
     {
+        if (!enabled) CloseInkPicker();
+        if (enabled) SelectImage(null, null);
         drawing = enabled;
         UpdateImageBar();
         if (enabled)
@@ -543,8 +517,7 @@ sealed partial class Inkpad : Window
         }
         ApplyDrawingMode();
         if (enabled) InkpadStyle.AnimateIn(drawingBar, -3, 125);
-        if (enabled) current.Ink.Focus();
-        else current.TextBox.Focus();
+        FocusDrawingTool();
     }
 
     void ApplyDrawingMode()
@@ -553,32 +526,29 @@ sealed partial class Inkpad : Window
         var ink = current.Ink;
         bool shaping = drawing && shape.HasValue;
         shapeLayer.Cancel();
-        ink.DefaultDrawingAttributes = new DrawingAttributes { Color = InkColors[colorIndex], Width = inkSize, Height = inkSize, FitToCurve = true, IgnorePressure = false };
+        bool marking = drawing && highlighter && !shaping && !erasing;
+        bool inkInput = drawing && !shaping && !TextHighlightActive;
+        ink.DefaultDrawingAttributes = ToolAttributes(marking);
         shapeLayer.Attributes = ink.DefaultDrawingAttributes;
         if (shaping) shapeLayer.Tool = shape.Value;
         shapeLayer.Visibility = shaping ? Visibility.Visible : Visibility.Collapsed;
-        ink.EditingMode = drawing && !shaping ? (erasing ? InkCanvasEditingMode.EraseByStroke : InkCanvasEditingMode.Ink) : InkCanvasEditingMode.None;
-        ink.EditingModeInverted = drawing && !shaping ? InkCanvasEditingMode.EraseByStroke : InkCanvasEditingMode.None;
-        ink.IsHitTestVisible = drawing && !shaping;
+        ink.EditingMode = inkInput ? (erasing ? InkCanvasEditingMode.EraseByStroke : InkCanvasEditingMode.Ink) : InkCanvasEditingMode.None;
+        ink.EditingModeInverted = inkInput ? InkCanvasEditingMode.EraseByStroke : InkCanvasEditingMode.None;
+        ink.IsHitTestVisible = inkInput;
         ink.Cursor = erasing ? Cursors.Cross : Cursors.Pen;
+        UpdateInkToolButtons(shaping);
         drawingBar.Visibility = drawing ? Visibility.Visible : Visibility.Collapsed;
         drawButton.Background = drawing ? PaleBlue : Brushes.Transparent;
-        penButton.Background = erasing || shaping ? Brushes.Transparent : PaleBlue;
         eraserButton.Background = erasing ? PaleBlue : Brushes.Transparent;
         shapesButton.Background = shaping ? PaleBlue : Brushes.Transparent;
         shapesButton.Content = WithChevron(shaping ? WithIcon(Symbol(ShapePaths[(int)shape.Value], 17), shape.Value.ToString()) :
             WithIcon(Symbol("M 3,6 H 10 V 13 H 3 Z M 7,4 A 3.5,3.5 0 1 1 12,8", 17), "Shapes"));
-        for (int i = 0; i < colorButtons.Length; i++)
-        {
-            colorButtons[i].BorderBrush = i == colorIndex ? Blue : Brushes.Transparent;
-            colorButtons[i].BorderThickness = new Thickness(1);
-        }
         UpdateStatus();
     }
 
     void Undo(bool redo)
     {
-        if (!drawing)
+        if (!drawing || TextHighlightActive)
         {
             if (redo) current.TextBox.Redo();
             else current.TextBox.Undo();
@@ -633,12 +603,12 @@ sealed partial class Inkpad : Window
         if (current.CharacterCount == null) current.CharacterCount = current.PlainText.Replace("\r\n", "\n").Length;
         int count = current.CharacterCount.Value;
         characters.Text = count.ToString("N0", CultureInfo.CurrentCulture) + (count == 1 ? " character" : " characters");
-        fileMode.Text = drawing ? (shape.HasValue ? shape.Value.ToString() : erasing ? "Eraser" : "Pencil") : current.HasInk ? "Text + ink" : current.Formatted ? "Formatted" : current.Markdown ? "Markdown" : "Plain text";
+        fileMode.Text = drawing ? (shape.HasValue ? shape.Value.ToString() : erasing ? "Eraser" : highlighter ? (textOnlyHighlight ? "Text highlighter" : "Highlighter") : "Pencil") : current.HasInk ? "Text + ink" : current.Formatted ? "Formatted" : current.Markdown ? "Markdown" : "Plain text";
         bool inkFile = current.NeedsInkFile || (current.Path != null && NoteFiles.IsInkFile(current.Path));
         lineEnding.Text = inkFile ? "Inkpad note" : current.Newline == "\n" ? "Unix (LF)" : current.Newline == "\r" ? "Mac (CR)" : "Windows (CRLF)";
         encodingLabel.Text = inkFile ? "" : current.Encoding.CodePage == 65001 ? "UTF-8" : current.Encoding.WebName.ToUpperInvariant();
-        undoInkButton.IsEnabled = current.UndoInk.Count > 0;
-        redoInkButton.IsEnabled = current.RedoInk.Count > 0;
+        undoInkButton.IsEnabled = TextHighlightActive ? editor.CanUndo : current.UndoInk.Count > 0;
+        redoInkButton.IsEnabled = TextHighlightActive ? editor.CanRedo : current.RedoInk.Count > 0;
     }
 
     void Format(RoutedUICommand command)
@@ -879,6 +849,15 @@ sealed partial class Inkpad : Window
         }
         if (args.Key == Key.Escape)
         {
+            if (inkPicker != null)
+            {
+                var owner = inkPickerOwner;
+                CloseInkPicker();
+                if (drawing) FocusDrawingTool(); else owner.Focus();
+                args.Handled = true;
+                return;
+            }
+            if (imageCrop.HasValue) { StopImageCrop(); args.Handled = true; return; }
             if (drawing && shapeLayer.Cancel()) { args.Handled = true; return; }
             if (drawing) SetDrawing(false);
             else if (imageBar.Visibility == Visibility.Visible) SelectImage(null, null);
