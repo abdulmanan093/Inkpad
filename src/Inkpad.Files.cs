@@ -106,6 +106,44 @@ static class NoteFiles
         }
     }
 
+    internal static IEnumerable<Image> DocumentImages(BlockCollection blocks)
+    {
+        foreach (var block in blocks)
+        {
+            var paragraph = block as Paragraph;
+            if (paragraph != null)
+                foreach (var image in InlineImages(paragraph.Inlines)) yield return image;
+            var section = block as Section;
+            if (section != null)
+                foreach (var image in DocumentImages(section.Blocks)) yield return image;
+            var table = block as Table;
+            if (table != null)
+                foreach (var cell in table.RowGroups.SelectMany(group => group.Rows).SelectMany(row => row.Cells))
+                    foreach (var image in DocumentImages(cell.Blocks)) yield return image;
+            var list = block as List;
+            if (list != null)
+                foreach (var item in list.ListItems)
+                    foreach (var image in DocumentImages(item.Blocks)) yield return image;
+            var host = block as BlockUIContainer;
+            if (host != null && host.Child is Image) yield return (Image)host.Child;
+        }
+    }
+
+    static IEnumerable<Image> InlineImages(InlineCollection inlines)
+    {
+        foreach (var inline in inlines)
+        {
+            var host = inline as InlineUIContainer;
+            if (host != null && host.Child is Image) yield return (Image)host.Child;
+            var anchored = inline as AnchoredBlock;
+            if (anchored != null)
+                foreach (var image in DocumentImages(anchored.Blocks)) yield return image;
+            var span = inline as Span;
+            if (span != null)
+                foreach (var image in InlineImages(span.Inlines)) yield return image;
+        }
+    }
+
     internal const string InkExtension = ".inknote";
 
     internal static bool IsInkFile(string path)
@@ -135,6 +173,7 @@ static class NoteFiles
                 using (var text = Entry(archive, "text.rtf", 64L * 1024 * 1024))
                     note.Range.Load(text, DataFormats.Rtf);
                 RestoreHighlights(note, archive);
+                RestoreImageLayout(note, archive);
                 RestoreEmbeddedImages(note);
                 NoteTables.StyleLoaded(note.TextBox.Document);
                 using (var ink = Entry(archive, "ink.isf", 64L * 1024 * 1024))
@@ -288,13 +327,16 @@ static class NoteFiles
         {
             using (var info = new StreamWriter(archive.CreateEntry("note.info").Open(), new UTF8Encoding(false)))
                 info.Write("Inkpad 1\n" + note.PaperWidth.ToString("R", CultureInfo.InvariantCulture) + "\n" + (note.Formatted ? "1" : "0"));
+            var document = note.TextBox.Document;
+            if (DocumentImages(document.Blocks).Any(image => image.Parent is BlockUIContainer)) document = PrepareImageLayout(note, archive);
+            var range = new TextRange(document.ContentStart, document.ContentEnd);
             using (var text = new MemoryStream())
             {
-                note.Range.Save(text, DataFormats.Rtf);
+                range.Save(text, DataFormats.Rtf);
                 text.Position = 0;
                 using (var entry = archive.CreateEntry("text.rtf").Open()) text.CopyTo(entry);
             }
-            SaveHighlights(note, archive);
+            SaveHighlights(range, archive);
             using (var strokes = new MemoryStream())
             {
                 note.Ink.Strokes.Save(strokes);
@@ -304,10 +346,67 @@ static class NoteFiles
         }
     }
 
-    static void SaveHighlights(Note note, ZipArchive archive)
+    static FlowDocument PrepareImageLayout(Note note, ZipArchive archive)
     {
-        var origin = note.TextBox.Document.ContentStart;
-        var runs = DocumentInlines(note.Range).OfType<Run>().Where(run => run.Background is System.Windows.Media.SolidColorBrush).ToArray();
+        var clone = CloneDocument(note.Range);
+        var images = DocumentImages(clone.Blocks).ToArray();
+        using (var data = new StreamWriter(archive.CreateEntry("image-layout.tsv").Open(), new UTF8Encoding(false)))
+            for (int index = 0; index < images.Length; index++)
+            {
+                var image = images[index];
+                var block = image.Parent as BlockUIContainer;
+                var figure = block == null ? null : block.Parent as Figure;
+                if (figure == null) continue;
+                data.WriteLine(index.ToString(CultureInfo.InvariantCulture) + "\t" + figure.HorizontalAnchor + "\t" + figure.WrapDirection);
+                var at = figure.ElementStart;
+                block.Child = null;
+                new TextRange(at, figure.ElementEnd).Text = "";
+                new InlineUIContainer(image, at.GetInsertionPosition(LogicalDirection.Forward)) { BaselineAlignment = BaselineAlignment.Top };
+            }
+        return clone;
+    }
+
+    internal static FlowDocument CloneDocument(TextRange range)
+    {
+        // The XAML package is generated in memory from the editor. Note files are read as RTF and data only.
+        var clone = new FlowDocument(new Paragraph());
+        using (var buffer = new MemoryStream())
+        {
+            range.Save(buffer, DataFormats.XamlPackage);
+            buffer.Position = 0;
+            new TextRange(clone.ContentStart, clone.ContentEnd).Load(buffer, DataFormats.XamlPackage);
+        }
+        return clone;
+    }
+
+    static void RestoreImageLayout(Note note, ZipArchive archive)
+    {
+        if (archive.GetEntry("image-layout.tsv") == null) return;
+        var images = DocumentImages(note.TextBox.Document.Blocks).ToArray();
+        using (var data = new StreamReader(Entry(archive, "image-layout.tsv", 1024 * 1024)))
+            for (string line = data.ReadLine(); line != null; line = data.ReadLine())
+            {
+                var fields = line.Split('\t');
+                int index;
+                FigureHorizontalAnchor anchor;
+                WrapDirection wrap;
+                if (fields.Length != 3 || !int.TryParse(fields[0], NumberStyles.None, CultureInfo.InvariantCulture, out index) || index >= images.Length ||
+                    !Enum.TryParse(fields[1], out anchor) || (anchor != FigureHorizontalAnchor.ContentLeft && anchor != FigureHorizontalAnchor.ContentRight && anchor != FigureHorizontalAnchor.ContentCenter) ||
+                    !Enum.TryParse(fields[2], out wrap) || (wrap != WrapDirection.Both && wrap != WrapDirection.None)) continue;
+                var image = images[index];
+                var host = image.Parent as InlineUIContainer;
+                if (host == null || double.IsNaN(image.Width) || image.Width <= 0) continue;
+                var at = host.ElementStart;
+                host.Child = null;
+                new TextRange(at, host.ElementEnd).Text = "";
+                Inkpad.PlaceBitmap(image, at, anchor, wrap);
+            }
+    }
+
+    static void SaveHighlights(TextRange range, ZipArchive archive)
+    {
+        var origin = range.Start;
+        var runs = DocumentInlines(range).OfType<Run>().Where(run => run.Background is System.Windows.Media.SolidColorBrush).ToArray();
         if (runs.Length == 0) return;
         using (var data = new StreamWriter(archive.CreateEntry("highlights.tsv").Open(), new UTF8Encoding(false)))
             foreach (var run in runs)
@@ -339,10 +438,10 @@ static class NoteFiles
 
     static void RestoreEmbeddedImages(Note note)
     {
-        foreach (var image in DocumentInlines(note.Range).OfType<InlineUIContainer>().Select(container => container.Child).OfType<Image>())
+        foreach (var image in DocumentImages(note.TextBox.Document.Blocks))
         {
-            image.Cursor = System.Windows.Input.Cursors.Hand;
-            image.ToolTip = "Right-click to resize, crop, copy, or delete";
+            image.Cursor = System.Windows.Input.Cursors.SizeAll;
+            image.ToolTip = "Click to edit or drag to move";
             System.Windows.Automation.AutomationProperties.SetName(image, "Embedded image");
         }
     }

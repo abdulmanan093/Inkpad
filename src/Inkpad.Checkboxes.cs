@@ -42,7 +42,7 @@ sealed partial class Inkpad
             foreach (int rgb in Preferences.CheckboxColors)
             {
                 var brush = new SolidColorBrush(Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb));
-                var choice = AddItem(recent, "#" + rgb.ToString("X6"), "", delegate { SetCheckboxColor(brush); });
+                var choice = AddItem(recent, "#" + rgb.ToString("X6"), "", delegate { UseCustomCheckboxColor(brush.Color); });
                 choice.Icon = new Border { Width = 12, Height = 12, Background = brush, CornerRadius = new CornerRadius(2) };
             }
             if (!recent.HasItems) AddItem(recent, "No recent colors", "", delegate { }).IsEnabled = false;
@@ -60,9 +60,14 @@ sealed partial class Inkpad
     {
         var color = PickColor((checkboxBrush ?? (SolidColorBrush)Text).Color, Preferences.CheckboxColors);
         if (!color.HasValue) return;
-        Preferences.RememberColor(color.Value);
+        UseCustomCheckboxColor(color.Value);
+    }
+
+    void UseCustomCheckboxColor(Color color)
+    {
+        Preferences.RememberColor(color);
         Preferences.Save();
-        SetCheckboxColor(new SolidColorBrush(color.Value));
+        SetCheckboxColor(new SolidColorBrush(color));
     }
 
     Color? PickColor(Color color, List<int> custom = null)

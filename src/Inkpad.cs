@@ -19,7 +19,7 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyTitle("Inkpad")]
 [assembly: System.Reflection.AssemblyDescription("Offline text and drawing editor for Windows")]
 [assembly: System.Reflection.AssemblyProduct("Inkpad")]
-[assembly: System.Reflection.AssemblyVersion("1.7.1.0")]
+[assembly: System.Reflection.AssemblyVersion("1.8.0.0")]
 
 sealed partial class Inkpad : Window
 {
@@ -124,6 +124,7 @@ sealed partial class Inkpad : Window
         chrome.Children.Add(workspace);
         BuildToolbar();
         BuildDrawingBar();
+        BuildImageBar();
         BuildFindBar();
         BuildStatusBar();
         shapeLayer.Committed += delegate(Stroke stroke) { current.Ink.Strokes.Add(stroke); };
@@ -438,6 +439,7 @@ sealed partial class Inkpad : Window
             page.Children.Clear();
         }
         current = note;
+        UpdateImageBar();
         drawing = erasing = false;
         shape = null;
         page = new Grid { HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top, LayoutTransform = pageScale, Background = Paper };
@@ -532,6 +534,7 @@ sealed partial class Inkpad : Window
     void SetDrawing(bool enabled)
     {
         drawing = enabled;
+        UpdateImageBar();
         if (enabled)
         {
             HideFind();
@@ -878,6 +881,7 @@ sealed partial class Inkpad : Window
         {
             if (drawing && shapeLayer.Cancel()) { args.Handled = true; return; }
             if (drawing) SetDrawing(false);
+            else if (imageBar.Visibility == Visibility.Visible) SelectImage(null, null);
             else if (findBar.Visibility == Visibility.Visible) HideFind();
             else return;
         }

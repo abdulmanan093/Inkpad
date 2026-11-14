@@ -189,13 +189,9 @@ sealed partial class Inkpad
         if (dialog.ShowDialog() != true) return;
         try
         {
-            var copy = new FlowDocument { FontFamily = current.TextBox.Document.FontFamily, FontSize = current.TextBox.Document.FontSize };
-            using (var buffer = new MemoryStream())
-            {
-                current.Range.Save(buffer, DataFormats.Rtf);
-                buffer.Position = 0;
-                new TextRange(copy.ContentStart, copy.ContentEnd).Load(buffer, DataFormats.Rtf);
-            }
+            var copy = NoteFiles.CloneDocument(current.Range);
+            copy.FontFamily = current.TextBox.Document.FontFamily;
+            copy.FontSize = current.TextBox.Document.FontSize;
             double width = dialog.PrintableAreaWidth, height = dialog.PrintableAreaHeight;
             if (printSettings.Landscape && height > width) { double swap = width; width = height; height = swap; }
             var margins = printSettings.Margins;

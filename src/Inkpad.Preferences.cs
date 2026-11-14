@@ -16,6 +16,7 @@ using Microsoft.Win32;
 
 sealed class InkpadPreferences
 {
+    const int RecentColorLimit = 4;
     internal string Theme = "System";
     internal string Font = "Consolas";
     internal string FontStyle = "Regular";
@@ -57,8 +58,9 @@ sealed class InkpadPreferences
             value.ActiveFile = root.GetAttribute("activeFile");
             if (value.Recent) value.RecentFiles.AddRange(root.SelectNodes("recent/file").Cast<XmlNode>().Select(node => node.InnerText).Take(10));
             if (value.Restore) value.OpenFiles.AddRange(root.SelectNodes("open/file").Cast<XmlNode>().Select(node => node.InnerText).Take(60));
-            foreach (XmlNode node in root.SelectNodes("colors/color").Cast<XmlNode>().Take(16))
+            foreach (XmlNode node in root.SelectNodes("colors/color").Cast<XmlNode>())
             {
+                if (value.CheckboxColors.Count == RecentColorLimit) break;
                 int rgb;
                 if (int.TryParse(node.InnerText, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out rgb) && rgb >= 0 && rgb <= 0xffffff && !value.CheckboxColors.Contains(rgb)) value.CheckboxColors.Add(rgb);
             }
@@ -124,7 +126,7 @@ sealed class InkpadPreferences
         int rgb = color.R << 16 | color.G << 8 | color.B;
         CheckboxColors.Remove(rgb);
         CheckboxColors.Insert(0, rgb);
-        if (CheckboxColors.Count > 16) CheckboxColors.RemoveAt(16);
+        if (CheckboxColors.Count > RecentColorLimit) CheckboxColors.RemoveAt(RecentColorLimit);
     }
 
     static void WriteFiles(XmlWriter xml, string name, IEnumerable<string> paths)

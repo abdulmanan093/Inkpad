@@ -50,12 +50,15 @@ static class InkpadTests
         settings.OpenFiles.Add(@"C:\Test\Open.txt");
         settings.RememberColor(Color.FromRgb(30, 60, 90));
         settings.RememberColor(Color.FromRgb(11, 22, 33));
+        settings.RememberColor(Color.FromRgb(1, 2, 3));
+        settings.RememberColor(Color.FromRgb(4, 5, 6));
+        settings.RememberColor(Color.FromRgb(7, 8, 9));
         settings.RememberColor(Color.FromRgb(30, 60, 90));
         settings.Save(path);
         var loaded = InkpadPreferences.Load(path);
         Require(loaded.Theme == "Dark" && loaded.Font == "Segoe UI" && loaded.FontSize == 20 && loaded.Restore && loaded.Spelling,
             "Restore editor preferences from local settings");
-        Require(loaded.CheckboxColors.SequenceEqual(new[] { 0x1E3C5A, 0x0B1621 }), "Remember custom checkbox colors in most-recent order across launches");
+        Require(loaded.CheckboxColors.SequenceEqual(new[] { 0x1E3C5A, 0x070809, 0x040506, 0x010203 }), "Keep only the four newest unique checkbox colors across launches");
         Require(loaded.RecentFiles.SequenceEqual(settings.RecentFiles) && loaded.OpenFiles.SequenceEqual(settings.OpenFiles), "Restore recent files and session paths");
         Require(Inkpad.TransformWriting("One. Two. Three.", "List") == "- One.\r\n- Two.\r\n- Three." &&
             Inkpad.TransformWriting("I can't go.", "Formal") == "I cannot go.", "Run writing tools offline");
@@ -72,8 +75,8 @@ static class InkpadTests
         new TextRange(p.ContentStart, p.ContentEnd).ApplyPropertyValue(TextElement.BackgroundProperty, new SolidColorBrush(color));
         note.TextBox.CaretPosition = note.TextBox.Document.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
         var image = Inkpad.InsertBitmap(note, bitmap);
-        var container = (InlineUIContainer)image.Parent;
-        Inkpad.ReplaceBitmap(note, container, new CroppedBitmap(bitmap, new Int32Rect(2, 3, 14, 9)), 28);
+        var container = (Figure)((BlockUIContainer)image.Parent).Parent;
+        Inkpad.ReplaceBitmap(note, container, new CroppedBitmap(bitmap, new Int32Rect(2, 3, 14, 9)), 28, FigureHorizontalAnchor.ContentRight);
         string path = Path.Combine(directory, "image-highlight.inknote");
         NoteFiles.Save(note, path, false);
         var restored = new Note();
@@ -82,13 +85,28 @@ static class InkpadTests
         var firstCharacter = first.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
         var highlight = new TextRange(firstCharacter, firstCharacter.GetPositionAtOffset(1)).GetPropertyValue(TextElement.BackgroundProperty) as SolidColorBrush;
         Require(highlight != null && highlight.Color == color, "Preserve custom text highlighting in the saved note");
-        var restoredImage = NoteFiles.DocumentInlines(restored.Range).OfType<InlineUIContainer>().Select(item => item.Child).OfType<Image>().Single();
+        var restoredImage = NoteFiles.DocumentImages(restored.TextBox.Document.Blocks).Single();
         Require(restoredImage.Source is BitmapSource && Math.Abs(restoredImage.Width - 28) < 1,
             "Preserve the cropped image and its display size in the saved note");
-        var restoredContainer = (InlineUIContainer)restoredImage.Parent;
+        var restoredContainer = (Figure)((BlockUIContainer)restoredImage.Parent).Parent;
+        Require(restoredContainer.HorizontalAnchor == FigureHorizontalAnchor.ContentRight && restoredContainer.WrapDirection == WrapDirection.Both,
+            "Restore floating image placement and wrapping");
         new TextRange(restoredContainer.ElementStart, restoredContainer.ElementEnd).Text = "";
-        Require(!restored.TextBox.Document.Blocks.OfType<Paragraph>().SelectMany(block => block.Inlines.OfType<InlineUIContainer>()).Any(),
+        Require(!NoteFiles.DocumentImages(restored.TextBox.Document.Blocks).Any(),
             "Delete a selected embedded image");
+
+        var legacy = new Note { Formatted = true };
+        legacy.SetPlainText("An existing inline image");
+        var line = (Paragraph)legacy.TextBox.Document.Blocks.FirstBlock;
+        var inline = new InlineUIContainer(new Image { Source = bitmap, Width = 24, Height = 16 }, line.ContentStart);
+        string legacyPath = Path.Combine(directory, "legacy-inline-image.inknote");
+        NoteFiles.Save(legacy, legacyPath, false);
+        var loadedLegacy = new Note();
+        NoteFiles.Load(loadedLegacy, legacyPath);
+        var legacyImage = NoteFiles.DocumentImages(loadedLegacy.TextBox.Document.Blocks).Single();
+        Require(legacyImage.Parent is InlineUIContainer, "Read the previous inline image format");
+        var migrated = Inkpad.ReplaceBitmap(loadedLegacy, (InlineUIContainer)legacyImage.Parent, (BitmapSource)legacyImage.Source, 24);
+        Require(((BlockUIContainer)migrated.Parent).Parent is Figure, "Convert an existing inline image to a wrapping image when edited");
     }
 
     static void TestRestrictedFolderSave(string directory)
@@ -294,15 +312,30 @@ static class InkpadTests
         var bitmap = BitmapSource.Create(8, 8, 96, 96, PixelFormats.Bgra32, null, new byte[256], 32);
         note.TextBox.CaretPosition = note.TextBox.Document.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
         var image = Inkpad.InsertBitmap(note, bitmap);
-        var container = (InlineUIContainer)image.Parent;
-        note.TextBox.Selection.Select(container.ElementStart, container.ElementEnd);
-        Require(ReferenceEquals(Inkpad.SelectedImage(note.TextBox), image), "Recognize a selected image for copy or delete");
+        var container = (Figure)((BlockUIContainer)image.Parent).Parent;
+        Call(editor, "SelectImage", note, image);
+        Require(((Border)Field(editor, "imageBar")).Visibility == Visibility.Visible, "Expose resize and crop controls for the selected image");
         note.TextBox.CaretPosition = note.TextBox.Document.ContentEnd.GetInsertionPosition(LogicalDirection.Backward);
         var data = new DataObject(DataFormats.Bitmap, bitmap);
         var paste = new DataObjectPastingEventArgs(data, false, DataFormats.Bitmap);
         note.TextBox.RaiseEvent(paste);
-        Require(paste.CommandCancelled && NoteFiles.DocumentInlines(note.Range).OfType<InlineUIContainer>().Count() == 2,
+        Require(paste.CommandCancelled && NoteFiles.DocumentImages(note.TextBox.Document.Blocks).Count() == 2,
             "Paste a bitmap through the editor's clipboard handler");
+
+        note.SetPlainText("The first paragraph stays above the image.\n" + string.Concat(Enumerable.Repeat("Text wraps around the edge of the image. ", 26)));
+        var paragraph = (Paragraph)note.TextBox.Document.Blocks.LastBlock;
+        note.TextBox.CaretPosition = paragraph.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
+        var wrapBitmap = BitmapSource.Create(200, 120, 96, 96, PixelFormats.Bgra32, null, new byte[200 * 120 * 4], 200 * 4);
+        var wrapped = Inkpad.InsertBitmap(note, wrapBitmap);
+        Layout(root);
+        var origin = wrapped.TranslatePoint(new Point(), note.TextBox);
+        var firstText = paragraph.Inlines.LastInline.ContentStart.GetCharacterRect(LogicalDirection.Forward);
+        Require(firstText.X >= origin.X + wrapped.ActualWidth - 1 && Math.Abs(firstText.Y - origin.Y) < 20,
+            "Lay text out beside the top of the image with no overlap");
+        var figure = (Figure)((BlockUIContainer)wrapped.Parent).Parent;
+        var right = Inkpad.ReplaceBitmap(note, figure, wrapBitmap, 170, FigureHorizontalAnchor.ContentRight);
+        Layout(root);
+        Require(right.TranslatePoint(new Point(), note.TextBox).X > origin.X + 150, "Reflow text when the image moves to the right");
         note.SetPlainText("");
         note.Formatted = false;
         note.Dirty = false;
