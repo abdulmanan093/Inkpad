@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -69,13 +70,10 @@ sealed partial class Inkpad
 
     FrameworkElement BuildCropTools()
     {
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(12, 1, 0, 1),
+        var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center,
             Visibility = Visibility.Collapsed };
         row.Children.Add(ActionButton(WithIcon(Symbol(CropIcon, 16), "Apply crop"), "Apply crop", 104, CommitImageCrop));
         row.Children.Add(ActionButton("Cancel", "Cancel crop (Esc)", 64, delegate { StopImageCrop(); current.TextBox.Focus(); }));
-        var instruction = Label("Drag the handles to keep the part you want.", 12, Muted);
-        instruction.Margin = new Thickness(12, 0, 0, 0);
-        row.Children.Add(instruction);
         cropImageTools = row;
         return row;
     }
@@ -130,6 +128,77 @@ sealed partial class Inkpad
         imageMove = new ImageMoveDrag { StartOnPage = pointer, StartInWindow = windowPointer, Initial = bounds };
     }
 
+    void AddImagePointerHandlers(Grid surface)
+    {
+        surface.PreviewMouseDown += delegate(object sender, MouseButtonEventArgs args)
+        {
+            if (drawing || markdownPreview != null || imageHandles.Any(handle => handle.IsMouseOver) ||
+                (args.ChangedButton != MouseButton.Left && args.ChangedButton != MouseButton.Right)) return;
+
+            var pointer = args.GetPosition(surface);
+            var image = SelectImageAtPointer(pointer);
+            if (image == null) return;
+            args.Handled = true;
+            if (args.ChangedButton == MouseButton.Right)
+                ShowImageMenu(current, image);
+            else
+            {
+                StartImageMove(pointer, args.GetPosition(this));
+                if (imageMove != null && !surface.CaptureMouse()) CancelImageMove();
+            }
+        };
+        surface.PreviewMouseMove += delegate(object sender, MouseEventArgs args)
+        {
+            if (imageMove == null || !surface.IsMouseCaptured) return;
+            MoveImagePreview(args.GetPosition(surface), args.GetPosition(this));
+            args.Handled = true;
+        };
+        surface.PreviewMouseUp += delegate(object sender, MouseButtonEventArgs args)
+        {
+            if (imageMove == null || args.ChangedButton != MouseButton.Left || !surface.IsMouseCaptured) return;
+            MoveImagePreview(args.GetPosition(surface), args.GetPosition(this));
+            FinishImageMove();
+            args.Handled = true;
+        };
+        surface.LostMouseCapture += delegate(object sender, MouseEventArgs args)
+        {
+            if (args.OriginalSource == surface) CancelImageMove();
+        };
+        surface.QueryCursor += delegate(object sender, QueryCursorEventArgs args)
+        {
+            if (imageMove == null) return;
+            args.Cursor = Cursors.Arrow;
+            args.Handled = true;
+        };
+    }
+
+    Image SelectImageAtPointer(Point pointer)
+    {
+        var editor = current.TextBox;
+        Image image = null;
+        // The last image is the topmost, even when its pixels are transparent.
+        for (int index = current.Images.Count - 1; index >= 0; index--)
+        {
+            var item = current.Images[index];
+            if (!item.Bounds.Contains(pointer)) continue;
+            image = item.Image;
+            break;
+        }
+        var editorPointer = page.TranslatePoint(pointer, editor);
+        if (image == null && new Rect(editor.RenderSize).Contains(editorPointer))
+            image = ImageAt(editor, editorPointer);
+
+        if (image == null)
+        {
+            if (imageNote == current) SelectImage(null, null);
+            return null;
+        }
+        if (imageCrop.HasValue) StopImageCrop();
+        editor.Focus();
+        SelectImage(current, image);
+        return image;
+    }
+
     void MoveImagePreview(Point pointer, Point windowPointer)
     {
         var move = imageMove;
@@ -181,6 +250,7 @@ sealed partial class Inkpad
     {
         if (imageMove == null) return;
         imageMove = null;
+        if (page.IsMouseCaptured) page.ReleaseMouseCapture();
         var item = SelectedPageImage;
         if (item != null) item.ShowAt(item.Bounds);
         if (activeImage != null) activeImage.Opacity = 1;

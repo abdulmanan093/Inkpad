@@ -19,7 +19,7 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyTitle("Inkpad")]
 [assembly: System.Reflection.AssemblyDescription("Offline text and drawing editor for Windows")]
 [assembly: System.Reflection.AssemblyProduct("Inkpad")]
-[assembly: System.Reflection.AssemblyVersion("1.10.1.0")]
+[assembly: System.Reflection.AssemblyVersion("1.10.2.0")]
 
 sealed partial class Inkpad : Window
 {
@@ -241,6 +241,8 @@ sealed partial class Inkpad : Window
         editorFormatting = formatting;
         Grid.SetColumn(formatting, 1);
         row.Children.Add(formatting);
+        Grid.SetColumn(imageBar, 1);
+        row.Children.Add(imageBar);
         var headings = ActionButton(WithChevron(Label("H1", 15, Text)), "Heading styles", 57, null);
         BuildHeadingMenu(headings);
         var bullets = ActionButton(WithChevron(Symbol("M 2,4 H 2.4 M 5,4 H 14 M 2,8 H 2.4 M 5,8 H 14 M 2,12 H 2.4 M 5,12 H 14", 18)), "List styles", 52, null);
@@ -427,6 +429,7 @@ sealed partial class Inkpad : Window
         foreach (var item in note.Images) imageLayer.Children.Add(item.View);
         page.Children.Add(shapeLayer);
         page.Children.Add(imageOverlay);
+        AddImagePointerHandlers(page);
         page.LayoutUpdated += delegate { if (imageNote == current) PositionImageOverlay(); };
         pageScroll.Content = page;
         ResizePage();
@@ -878,7 +881,6 @@ sealed partial class Inkpad : Window
             if (imageMove != null)
             {
                 CancelImageMove();
-                if (current.TextBox.IsMouseCaptured) current.TextBox.ReleaseMouseCapture();
                 args.Handled = true;
                 return;
             }

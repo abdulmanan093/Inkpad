@@ -21,7 +21,7 @@ sealed partial class Inkpad
     void BuildImageBar()
     {
         BuildImageOverlay();
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(12, 1, 0, 1) };
+        var row = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
         var crop = ActionButton(WithIcon(Symbol(CropIcon, 16), "Crop"), "Crop selected image", 70, StartImageCrop);
         row.Children.Add(crop);
         row.Children.Add(ActionButton("Copy", "Copy selected image", 60, delegate { if (activeImage != null) CopyBitmap(activeImage); }));
@@ -31,13 +31,14 @@ sealed partial class Inkpad
         var tools = new Grid();
         tools.Children.Add(row);
         tools.Children.Add(BuildCropTools());
-        imageBar.Child = Rule(tools, Surface);
-        Place(imageBar, Dock.Top);
+        imageBar.Child = tools;
     }
 
     void UpdateImageBar()
     {
-        imageBar.Visibility = !drawing && HasSelectedImage ? Visibility.Visible : Visibility.Collapsed;
+        bool editingImage = !drawing && HasSelectedImage;
+        imageBar.Visibility = editingImage ? Visibility.Visible : Visibility.Collapsed;
+        editorFormatting.Visibility = !editingImage && Preferences.Formatting ? Visibility.Visible : Visibility.Collapsed;
     }
 
     void SelectImage(Note note, Image image)
@@ -179,12 +180,7 @@ sealed partial class Inkpad
         var editor = note.TextBox;
         editor.AddHandler(Mouse.QueryCursorEvent, new QueryCursorEventHandler(delegate(object sender, QueryCursorEventArgs args)
         {
-            if (note == current && imageMove != null)
-            {
-                args.Cursor = Cursors.Arrow;
-                args.Handled = true;
-            }
-            else if (note == current && TextHighlightActive)
+            if (note == current && TextHighlightActive)
             {
                 args.Cursor = Cursors.IBeam;
                 args.Handled = true;
@@ -205,45 +201,21 @@ sealed partial class Inkpad
         {
             if (args.Text == " ") CorrectPreviousWord(note);
         };
-        editor.AddHandler(UIElement.PreviewMouseDownEvent, new MouseButtonEventHandler(delegate(object sender, MouseButtonEventArgs args)
+        editor.PreviewMouseDown += delegate(object sender, MouseButtonEventArgs args)
         {
-            var point = args.GetPosition(editor);
-            if (args.ChangedButton == MouseButton.Left && BeginTextHighlight(note, point)) { args.Handled = true; return; }
-            if (imageCrop.HasValue) StopImageCrop();
-            var image = ImageAt(editor, point);
-            if (image == null) { if (imageNote == note) SelectImage(null, null); return; }
-            args.Handled = true;
-            editor.Focus();
-            if (args.ChangedButton == MouseButton.Left)
-            {
-                SelectImage(note, image);
-                if (editor.CaptureMouse()) StartImageMove(args.GetPosition(page), args.GetPosition(this));
-            }
-            else if (args.ChangedButton == MouseButton.Right)
-            {
-                SelectImage(note, image);
-                ShowImageMenu(note, image);
-            }
-        }), true);
+            if (args.ChangedButton == MouseButton.Left && BeginTextHighlight(note, args.GetPosition(editor))) args.Handled = true;
+        };
         editor.PreviewMouseUp += delegate(object sender, MouseButtonEventArgs args)
         {
-            if (args.ChangedButton == MouseButton.Left && EndTextHighlight(note, args.GetPosition(editor))) { args.Handled = true; return; }
-            if (args.ChangedButton != MouseButton.Left || imageMove == null || note != current) return;
-            MoveImagePreview(args.GetPosition(page), args.GetPosition(this));
-            FinishImageMove();
-            if (editor.IsMouseCaptured) editor.ReleaseMouseCapture();
-            args.Handled = true;
+            if (args.ChangedButton == MouseButton.Left && EndTextHighlight(note, args.GetPosition(editor))) args.Handled = true;
         };
         editor.PreviewMouseMove += delegate(object sender, MouseEventArgs args)
         {
-            if (highlightAnchor != null) DragTextHighlight(note, args.GetPosition(editor));
-            else if (imageMove != null && note == current && editor.IsMouseCaptured)
-                MoveImagePreview(args.GetPosition(page), args.GetPosition(this));
-            else return;
+            if (highlightAnchor == null) return;
+            DragTextHighlight(note, args.GetPosition(editor));
             args.Handled = true;
         };
-        editor.LostMouseCapture += delegate { if (imageNote == note) CancelImageMove(); highlightAnchor = null; };
-        editor.SelectionChanged += delegate { if (imageNote == note) SelectImage(null, null); };
+        editor.LostMouseCapture += delegate { highlightAnchor = null; };
         editor.TextChanged += delegate
         {
             if (imageNote == note && !HasSelectedImage) SelectImage(null, null);

@@ -415,8 +415,27 @@ static class InkpadTests
             "Place images in front of text and page ink");
         var from = item.Bounds.TopLeft;
         var delta = new Vector(287, 256);
-        Call(editor, "StartImageMove", from, from);
-        Call(editor, "MoveImagePreview", from + delta, from + delta);
+        var press = from + new Vector(45, 35);
+        Call(editor, "SelectImage", null, null);
+        Layout(root);
+        Point beforeSelection = page.TranslatePoint(press, root);
+        Call(editor, "SelectImageAtPointer", press);
+        Layout(root);
+        Require(ReferenceEquals(Field(editor, "activeImage"), item.Image) &&
+            (page.TranslatePoint(press, root) - beforeSelection).Length < .5,
+            "Select a transparent picture from its page bounds without shifting the page");
+        Call(editor, "StartImageMove", press, press);
+        Call(editor, "FinishImageMove");
+        Require(item.Bounds.TopLeft == from && ReferenceEquals(Field(editor, "activeImage"), item.Image),
+            "A click keeps the picture selected without moving it");
+        Call(editor, "SelectImageAtPointer", new Point(from.X + item.Bounds.Width + 15, press.Y));
+        Require(Field(editor, "activeImage") == null, "Clicking outside the picture clears the selection");
+        Call(editor, "SelectImageAtPointer", press);
+        Call(editor, "StartImageMove", press, press);
+        Call(editor, "MoveImagePreview", press + delta, press + delta);
+        Layout(root);
+        Require((item.View.TranslatePoint(new Point(), page) - (from + delta)).Length < 2,
+            "Follow the drag from the initial press before release");
         Call(editor, "FinishImageMove");
         Layout(root);
         var position = item.View.TranslatePoint(new Point(), page);

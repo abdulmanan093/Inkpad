@@ -358,7 +358,7 @@ sealed partial class Inkpad
     {
         ApplyTheme();
         wrap = Preferences.Wrap;
-        if (editorFormatting != null) editorFormatting.Visibility = Preferences.Formatting ? Visibility.Visible : Visibility.Collapsed;
+        UpdateImageBar();
         if (editorStatus != null) editorStatus.Visibility = Preferences.Status ? Visibility.Visible : Visibility.Collapsed;
         if (writingButton != null) writingButton.Visibility = Preferences.Writing ? Visibility.Visible : Visibility.Collapsed;
         foreach (var note in notes) ApplyEditorPreferences(note);

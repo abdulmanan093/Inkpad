@@ -116,16 +116,6 @@ sealed partial class Inkpad
     {
         note.History.TrackInk(item.Ink.Strokes);
         item.Ink.Strokes.StrokesChanged += delegate { if (!note.History.Replaying) MarkDirty(note); };
-        item.View.PreviewMouseDown += delegate(object sender, MouseButtonEventArgs args)
-        {
-            if (drawing || note != current) return;
-            if (args.ChangedButton != MouseButton.Left && args.ChangedButton != MouseButton.Right) return;
-            note.TextBox.Focus();
-            SelectImage(note, item.Image);
-            if (args.ChangedButton == MouseButton.Right) ShowImageMenu(note, item.Image);
-            else if (note.TextBox.CaptureMouse()) StartImageMove(args.GetPosition(page), args.GetPosition(this));
-            args.Handled = true;
-        };
     }
 
     void AddPageImage(Note note, PageImage item, int index)
