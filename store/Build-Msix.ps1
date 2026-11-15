@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory, ParameterSetName = 'Submission')][string]$Publisher,
     [Parameter(Mandatory, ParameterSetName = 'Submission')][string]$PublisherDisplayName,
     [Parameter(Mandatory, ParameterSetName = 'Validation')][switch]$ValidationOnly,
-    [string]$AppName = 'Inkpad',
+    [string]$AppName,
     [string]$MakeAppx,
     [string]$OutputPath
 )
@@ -27,16 +27,18 @@ if ($ValidationOnly) {
     $Publisher = 'CN=Inkpad Packaging Test'
     $PublisherDisplayName = 'Inkpad Packaging Test'
 }
-if (!$OutputPath) {
-    $filename = if ($ValidationOnly) { 'Inkpad.validation.msix' } else { 'Inkpad.msix' }
-    $OutputPath = Join-Path $PSScriptRoot $filename
-}
-$OutputPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
 $work = (New-Item -Path (Join-Path $PSScriptRoot 'obj') -ItemType Directory -Force).FullName
 $layout = (New-Item -Path (Join-Path $work ([Guid]::NewGuid().ToString('N'))) -ItemType Directory).FullName
 $assets = (New-Item -Path (Join-Path $layout 'Assets') -ItemType Directory).FullName
 $app = Join-Path $layout 'Inkpad.exe'
 & (Join-Path $src 'build.ps1') -Store -OutputPath $app
+$versionInfo = (Get-Item -LiteralPath $app).VersionInfo
+if (!$AppName) { $AppName = $versionInfo.ProductName }
+if (!$OutputPath) {
+    $filename = if ($ValidationOnly) { 'NoteMixPad.validation.msix' } else { 'NoteMixPad.msix' }
+    $OutputPath = Join-Path $PSScriptRoot $filename
+}
+$OutputPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
 
 Add-Type -AssemblyName System.Drawing
 $icon = [System.Drawing.Icon]::new((Join-Path $src 'Inkpad.ico'), 256, 256)
@@ -63,10 +65,11 @@ try {
 [xml]$manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'AppxManifest.xml') -Raw
 $manifest.Package.Identity.SetAttribute('Name', $IdentityName)
 $manifest.Package.Identity.SetAttribute('Publisher', $Publisher)
-$manifest.Package.Identity.SetAttribute('Version', (Get-Item -LiteralPath $app).VersionInfo.FileVersion)
+$manifest.Package.Identity.SetAttribute('Version', $versionInfo.FileVersion)
 $manifest.Package.Properties.DisplayName = $AppName
 $manifest.Package.Properties.PublisherDisplayName = $PublisherDisplayName
 $manifest.Package.Applications.Application.VisualElements.SetAttribute('DisplayName', $AppName)
+$manifest.Package.Applications.Application.Extensions.Extension.FileTypeAssociation.DisplayName = "$AppName note"
 $manifest.Save((Join-Path $layout 'AppxManifest.xml'))
 
 & $MakeAppx pack /d $layout /p $OutputPath /o

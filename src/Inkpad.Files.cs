@@ -144,11 +144,18 @@ static class NoteFiles
         }
     }
 
-    internal const string InkExtension = ".inknote";
+    internal const string InkExtension = ".notemix";
+    internal const string LegacyInkExtension = ".inknote";
 
     internal static bool IsInkFile(string path)
     {
-        return string.Equals(Path.GetExtension(path), InkExtension, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(Path.GetExtension(path), InkExtension, StringComparison.OrdinalIgnoreCase) ||
+            IsLegacyInkFile(path);
+    }
+
+    internal static bool IsLegacyInkFile(string path)
+    {
+        return string.Equals(Path.GetExtension(path), LegacyInkExtension, StringComparison.OrdinalIgnoreCase);
     }
 
     internal static void Load(Note note, string path)
@@ -167,7 +174,7 @@ static class NoteFiles
                     !double.TryParse(metadata[1], NumberStyles.Float, CultureInfo.InvariantCulture, out width) ||
                     double.IsNaN(width) || width < 0 || width > 50000 ||
                     (metadata[2] != "0" && metadata[2] != "1"))
-                    throw new InvalidDataException("This Inkpad note has an unsupported format.");
+                    throw new InvalidDataException("This " + Inkpad.NoteTypeName + " has an unsupported format.");
                 note.PaperWidth = width;
                 note.Formatted = metadata[2] == "1";
                 using (var text = Entry(archive, "text.rtf", 64L * 1024 * 1024))
@@ -208,7 +215,7 @@ static class NoteFiles
                 }
             }
             if (content.IndexOf('\0') >= 0)
-                throw new InvalidDataException("Choose a text file or an Inkpad note.");
+                throw new InvalidDataException("Choose a text file or a " + Inkpad.NoteTypeName + ".");
             int newline = content.IndexOfAny(new[] { '\r', '\n' });
             if (newline >= 0)
                 note.Newline = content[newline] == '\n' ? "\n" :
@@ -521,7 +528,7 @@ static class NoteFiles
     static Stream Entry(ZipArchive archive, string name, long limit)
     {
         var entry = archive.GetEntry(name);
-        if (entry == null || entry.Length > limit) throw new InvalidDataException("The Inkpad note is incomplete or too large.");
+        if (entry == null || entry.Length > limit) throw new InvalidDataException("The " + Inkpad.NoteTypeName + " is incomplete or too large.");
         return entry.Open();
     }
 

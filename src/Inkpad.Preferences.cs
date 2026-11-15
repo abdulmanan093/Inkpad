@@ -21,7 +21,7 @@ sealed class InkpadPreferences
     internal string Font = "Consolas";
     internal string FontStyle = "Regular";
     internal double FontSize = 17;
-    internal bool Wrap = true, Formatting = true, Recent = true, Status = true, Writing = true;
+    internal bool Wrap = true, Formatting = true, Recent = true, Status = true;
     internal bool NewWindow, Restore, Spelling, Autocorrect;
     internal readonly List<string> RecentFiles = new List<string>();
     internal readonly List<string> OpenFiles = new List<string>();
@@ -50,7 +50,6 @@ sealed class InkpadPreferences
             value.Formatting = Read(root, "formatting", true);
             value.Recent = Read(root, "recent", true);
             value.Status = Read(root, "status", true);
-            value.Writing = Read(root, "writing", true);
             value.NewWindow = Read(root, "newWindow", false);
             value.Restore = Read(root, "restore", false);
             value.Spelling = Read(root, "spelling", false);
@@ -95,7 +94,6 @@ sealed class InkpadPreferences
                 xml.WriteAttributeString("formatting", Formatting.ToString());
                 xml.WriteAttributeString("recent", Recent.ToString());
                 xml.WriteAttributeString("status", Status.ToString());
-                xml.WriteAttributeString("writing", Writing.ToString());
                 xml.WriteAttributeString("newWindow", NewWindow.ToString());
                 xml.WriteAttributeString("restore", Restore.ToString());
                 xml.WriteAttributeString("spelling", Spelling.ToString());
@@ -148,7 +146,7 @@ sealed partial class Inkpad
     Button settingsBack;
     DockPanel titleBar, titleTabs;
     TextBlock settingsTitle;
-    FrameworkElement editorFormatting, editorStatus, writingButton;
+    FrameworkElement editorFormatting, editorStatus;
 
     void OpenSettings(bool focusFont = false)
     {
@@ -173,11 +171,11 @@ sealed partial class Inkpad
         var aboutTitle = Label("About this app", 15, Text);
         aboutTitle.FontWeight = FontWeights.SemiBold;
         about.Children.Add(aboutTitle);
-        about.Children.Add(new TextBlock { Text = "Inkpad " + typeof(Inkpad).Assembly.GetName().Version.ToString(3), Foreground = Text, Margin = new Thickness(0, 9, 0, 0) });
+        about.Children.Add(new TextBlock { Text = AppName + " " + typeof(Inkpad).Assembly.GetName().Version.ToString(3), Foreground = Text, Margin = new Thickness(0, 9, 0, 0) });
         about.Children.Add(new TextBlock { Text = "Free, offline Windows editor", Foreground = Muted, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 14) });
         about.Children.Add(SettingsButton("Help", delegate
         {
-            ShowNoteDialog("Inkpad help", "Ctrl+N creates a tab. Ctrl+O opens a local file. Ctrl+S saves it. Use Draw to sketch, or insert a checkbox from the toolbar. Save as .inknote to preserve drawings, tables, and rich formatting.", "OK", null);
+            ShowNoteDialog(AppName + " help", "Ctrl+N creates a tab. Ctrl+O opens a local file. Ctrl+S saves it. Use Draw to sketch, or insert a checkbox from the toolbar. Save as " + NoteFiles.InkExtension + " to preserve drawings, tables, and rich formatting.", "OK", null);
         }));
 
         Section(sections, "Appearance");
@@ -208,11 +206,11 @@ sealed partial class Inkpad
         SettingCard(sections, "Word wrap", "Fit text within the window by default", "↵", SettingSwitch("Word wrap", Preferences.Wrap, SetWrap));
         SettingCard(sections, "Formatting", "Show the formatting toolbar", "A", SettingSwitch("Formatting", Preferences.Formatting, value => { Preferences.Formatting = value; PreferencesChanged(); }));
 
-        Section(sections, "Opening Inkpad");
+        Section(sections, "Opening " + AppName);
         SettingCard(sections, "Opening files", "Choose where your files are opened", "↗", SettingChoice("Opening files",
             new[] { "Open in a new tab", "Open in a new window" }, Preferences.NewWindow ? "Open in a new window" : "Open in a new tab",
             value => { Preferences.NewWindow = value == "Open in a new window"; PreferencesChanged(); }));
-        SettingExpander(sections, "When Inkpad starts", "Choose which tabs to open", "▣", SettingChoice("When Inkpad starts",
+        SettingExpander(sections, "When " + AppName + " starts", "Choose which tabs to open", "▣", SettingChoice("When " + AppName + " starts",
             new[] { "Start with a new tab", "Reopen saved tabs" }, Preferences.Restore ? "Reopen saved tabs" : "Start with a new tab",
             value => { Preferences.Restore = value == "Reopen saved tabs"; PreferencesChanged(); }), false);
         SettingCard(sections, "Recent files", "Show recently opened and saved files in the File menu", "◷", SettingSwitch("Recent files", Preferences.Recent,
@@ -224,12 +222,10 @@ sealed partial class Inkpad
         SettingCard(sections, "Autocorrect", "Correct common typos when spell check is on", "A✓", SettingSwitch("Autocorrect", Preferences.Autocorrect,
             value => { Preferences.Autocorrect = value; PreferencesChanged(); }));
 
-        Section(sections, "Advanced features");
-        SettingCard(sections, "Writing tools", "Show tools that run locally on this device", "✧", SettingSwitch("Writing tools", Preferences.Writing,
-            value => { Preferences.Writing = value; PreferencesChanged(); }));
 #if !STORE
+        Section(sections, "Advanced features");
         var explorer = SettingSwitch("Edit in File Explorer", InkpadWindows.ExplorerMenuEnabled(), delegate { ToggleExplorerMenu(); });
-        SettingCard(sections, "Edit in File Explorer", "Add an Inkpad command to the classic right-click menu", "↗", explorer);
+        SettingCard(sections, "Edit in File Explorer", "Add an Edit in " + AppName + " command to the classic right-click menu", "↗", explorer);
 #endif
         settingsPage = new ScrollViewer { Content = grid, Background = SettingsBackground, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         shell.Visibility = Visibility.Collapsed;
@@ -360,7 +356,6 @@ sealed partial class Inkpad
         wrap = Preferences.Wrap;
         UpdateImageBar();
         if (editorStatus != null) editorStatus.Visibility = Preferences.Status ? Visibility.Visible : Visibility.Collapsed;
-        if (writingButton != null) writingButton.Visibility = Preferences.Writing ? Visibility.Visible : Visibility.Collapsed;
         foreach (var note in notes) ApplyEditorPreferences(note);
         ResizePage();
     }

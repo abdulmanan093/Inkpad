@@ -272,7 +272,7 @@ sealed partial class Inkpad
         {
             bool enable = !InkpadWindows.ExplorerMenuEnabled();
             InkpadWindows.SetExplorerMenu(enable);
-            if (enable) MessageBox.Show(this, "Right-click a text file or Inkpad note in File Explorer. If needed, choose Show more options, then Edit in Inkpad.",
+            if (enable) MessageBox.Show(this, "Right-click a text file or a " + NoteTypeName + " in File Explorer. If needed, choose Show more options, then Edit in " + AppName + ".",
                 "File Explorer integration", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception error) { MessageBox.Show(this, error.Message, "File Explorer integration", MessageBoxButton.OK, MessageBoxImage.Warning); }

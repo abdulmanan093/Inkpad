@@ -25,6 +25,7 @@ static class InkpadTests
             string directory = Path.GetFullPath(args[0]);
             Directory.CreateDirectory(directory);
             TestPlainText(directory);
+            TestSaveExtensions();
             TestNoteFiles(directory);
             TestRestrictedFolderSave(directory);
             TestMediaFiles(directory);
@@ -41,6 +42,21 @@ static class InkpadTests
             Console.Error.WriteLine(error);
             return 1;
         }
+    }
+
+    static void TestSaveExtensions()
+    {
+        var plain = Inkpad.CreateSaveDialog(new Note(), false);
+        var markdown = Inkpad.CreateSaveDialog(new Note { Markdown = true }, false);
+        var rich = Inkpad.CreateSaveDialog(new Note { Formatted = true }, true);
+        var legacy = Inkpad.CreateSaveDialog(new Note { Path = @"C:\Notes\Existing.INKNOTE" }, true);
+        Require(plain.DefaultExt.TrimStart('.') == "txt" && markdown.DefaultExt.TrimStart('.') == "md",
+            "Keep the plain-text and Markdown save defaults");
+        Require(rich.DefaultExt.TrimStart('.') == "notemix" && rich.Filter.EndsWith("|*.notemix") &&
+            new[] { plain, markdown, rich, legacy }.All(dialog => dialog.Filter.IndexOf("*.inknote", StringComparison.OrdinalIgnoreCase) < 0),
+            "Offer .notemix as the only rich-note Save As format");
+        Require(legacy.FileName == "Existing" && legacy.DefaultExt.TrimStart('.') == "notemix" &&
+            NoteFiles.IsInkFile(@"C:\Notes\Existing.INKNOTE"), "Open legacy notes and use .notemix for Save As");
     }
 
     static void TestPreferences(string directory)
@@ -61,8 +77,6 @@ static class InkpadTests
             "Restore editor preferences from local settings");
         Require(loaded.CheckboxColors.SequenceEqual(new[] { 0x1E3C5A, 0x070809, 0x040506, 0x010203 }), "Keep only the four newest unique checkbox colors across launches");
         Require(loaded.RecentFiles.SequenceEqual(settings.RecentFiles) && loaded.OpenFiles.SequenceEqual(settings.OpenFiles), "Restore recent files and session paths");
-        Require(Inkpad.TransformWriting("One. Two. Three.", "List") == "- One.\r\n- Two.\r\n- Three." &&
-            Inkpad.TransformWriting("I can't go.", "Formal") == "I cannot go.", "Run writing tools offline");
     }
 
     static void TestMediaFiles(string directory)
@@ -78,7 +92,7 @@ static class InkpadTests
         var image = Inkpad.InsertBitmap(note, bitmap);
         var container = (Figure)((BlockUIContainer)image.Parent).Parent;
         Inkpad.ReplaceBitmap(note, container, new CroppedBitmap(bitmap, new Int32Rect(2, 3, 14, 9)), 28, FigureHorizontalAnchor.ContentRight);
-        string path = Path.Combine(directory, "image-highlight.inknote");
+        string path = Path.Combine(directory, "image-highlight.notemix");
         NoteFiles.Save(note, path, false);
         var restored = new Note();
         NoteFiles.Load(restored, path);
@@ -265,7 +279,7 @@ static class InkpadTests
         Require(note.Ink.Strokes.Count == 1, "Undo removes a shape");
         Call(editor, "Undo", true);
         Require(note.Ink.Strokes.Count == 2, "Redo restores a shape");
-        note.Path = Path.Combine(directory, "editor.inknote");
+        note.Path = Path.Combine(directory, "editor.notemix");
         Call(editor, "Save", note, false);
         Require(((FrameworkElement)Field(editor, "saveFeedback")).Visibility == Visibility.Visible &&
             ((TextBlock)Field(editor, "saveFeedbackText")).Text == "Saved", "Show save confirmation after a successful write");
@@ -449,6 +463,29 @@ static class InkpadTests
         Call(editor, "Undo", false);
         Require(item.Bounds.Width == 150 && item.Ink.Strokes.GetBounds() == annotation, "Undo the resize and keep the annotation");
         var originalBounds = item.Bounds;
+        foreach (int corner in new[] { 0, 2, 4, 6 })
+        {
+            bool onLeft = corner == 0 || corner == 6;
+            bool onTop = corner == 0 || corner == 2;
+            var start = new Point(onLeft ? originalBounds.Left : originalBounds.Right,
+                onTop ? originalBounds.Top : originalBounds.Bottom);
+            var horizontal = new Vector(onLeft ? -30 : 30, 0);
+            var vertical = new Vector(0, onTop ? -20 : 20);
+            foreach (var motion in new[] { horizontal, vertical, horizontal + vertical })
+            {
+                Call(editor, "SelectImage", note, item.Image);
+                Call(editor, "StartImageHandle", start);
+                Call(editor, "MoveImageHandle", corner, start + motion);
+                Call(editor, "FinishImageHandle", false);
+                var bounds = item.Bounds;
+                Require(bounds.Width == originalBounds.Width + Math.Abs(motion.X) &&
+                    bounds.Height == originalBounds.Height + Math.Abs(motion.Y) &&
+                    (onLeft ? bounds.Right == originalBounds.Right : bounds.Left == originalBounds.Left) &&
+                    (onTop ? bounds.Bottom == originalBounds.Bottom : bounds.Top == originalBounds.Top),
+                    "Resize independently on both axes from corner handle " + corner + " by " + motion);
+                Call(editor, "Undo", false);
+            }
+        }
         foreach (int edge in new[] { 1, 3, 5, 7 })
         {
             Call(editor, "SelectImage", note, item.Image);
@@ -482,7 +519,7 @@ static class InkpadTests
         Require(item.Crop.X == 10 && item.Crop.Width == 140 && item.Ink.Strokes.GetBounds() == annotation,
             "Crop the picture and its annotations together");
         Call(editor, "Undo", false);
-        string path = Path.Combine(directory, "free-position.inknote");
+        string path = Path.Combine(directory, "free-position.notemix");
         NoteFiles.Save(note, path, false);
         var reloaded = new Note();
         NoteFiles.Load(reloaded, path);
@@ -1033,7 +1070,7 @@ static class InkpadTests
 
     static void RenderPreview(string directory, Inkpad editor, Note note, FrameworkElement root, MenuItem rectangle)
     {
-        note.Path = Path.Combine(directory, "Project notes.inknote");
+        note.Path = Path.Combine(directory, "Project notes.notemix");
         note.SetPlainText("Project notes\n\n\u2611 Review the first draft\n\u2610 Sketch the layout\n\nNext steps");
         var lines = note.TextBox.Document.Blocks.OfType<Paragraph>().ToArray();
         FirstCheckbox(lines[2]).ApplyPropertyValue(TextElement.ForegroundProperty, Brushes.SeaGreen);

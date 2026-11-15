@@ -11,7 +11,7 @@ static class InkpadWindows
 {
     const string Classes = @"Software\Classes\SystemFileAssociations\";
     const string Verb = @"\shell\Inkpad.Edit";
-    static readonly string[] Extensions = { ".txt", ".md", ".log", ".csv", ".json", ".ini", ".inknote" };
+    static readonly string[] Extensions = { ".txt", ".md", ".log", ".csv", ".json", ".ini", NoteFiles.InkExtension, NoteFiles.LegacyInkExtension };
     static readonly string Settings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Inkpad", "window.txt");
     internal static string Executable { get { return Process.GetCurrentProcess().MainModule.FileName; } }
     internal static string EditCommand(string executable) { return "\"" + executable + "\" \"%1\""; }
@@ -41,7 +41,7 @@ static class InkpadWindows
             {
                 using (var key = Registry.CurrentUser.CreateSubKey(path))
                 {
-                    key.SetValue("", "Edit in Inkpad");
+                    key.SetValue("", "Edit in " + Inkpad.AppName);
                     key.SetValue("Icon", "\"" + executable + "\",0");
                     using (var command = key.CreateSubKey("command")) command.SetValue("", EditCommand(executable));
                 }

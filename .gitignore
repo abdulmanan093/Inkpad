@@ -2,6 +2,7 @@
 *.pdb
 *.lnk
 *.msix
+*.notemix
 *.inknote
 /src/qa/
 .vs/

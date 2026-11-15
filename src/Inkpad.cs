@@ -16,13 +16,16 @@ using System.Windows.Media;
 using System.Windows.Shell;
 using Microsoft.Win32;
 
-[assembly: System.Reflection.AssemblyTitle("Inkpad")]
+[assembly: System.Reflection.AssemblyTitle(Inkpad.AppName)]
 [assembly: System.Reflection.AssemblyDescription("Offline text and drawing editor for Windows")]
-[assembly: System.Reflection.AssemblyProduct("Inkpad")]
-[assembly: System.Reflection.AssemblyVersion("1.10.2.0")]
+[assembly: System.Reflection.AssemblyProduct(Inkpad.AppName)]
+[assembly: System.Reflection.AssemblyVersion("1.10.4.0")]
 
 sealed partial class Inkpad : Window
 {
+    internal const string AppName = "NoteMix Pad";
+    internal const string NoteTypeName = AppName + " note";
+
     static readonly Brush Chrome = new SolidColorBrush(ColorOf("#E7E7E7")), Surface = new SolidColorBrush(ColorOf("#F6F6F6")), Paper = new SolidColorBrush(ColorOf("#F6F6F6")),
         Line = new SolidColorBrush(ColorOf("#E4E4E4")), Text = new SolidColorBrush(ColorOf("#191919")), Muted = new SolidColorBrush(ColorOf("#5C5C5C")),
         Blue = Brush("#124C86"), PaleBlue = new SolidColorBrush(ColorOf("#DCEBFA"));
@@ -78,7 +81,7 @@ sealed partial class Inkpad : Window
     internal Inkpad(string placementPath)
     {
         windowPlacementPath = placementPath;
-        Title = "Inkpad";
+        Title = AppName;
         Width = 1120;
         Height = 690;
         MinWidth = 720;
@@ -189,7 +192,7 @@ sealed partial class Inkpad : Window
         Icon = logo.Source;
         logo.Margin = new Thickness(13, 0, 5, 0);
         identity.Children.Add(logo);
-        settingsTitle = Label("Inkpad", 13, Text);
+        settingsTitle = Label(AppName, 13, Text);
         settingsTitle.Margin = new Thickness(6, 0, 0, 0);
         settingsTitle.Visibility = Visibility.Collapsed;
         identity.Children.Add(settingsTitle);
@@ -287,10 +290,6 @@ sealed partial class Inkpad : Window
         actions.Children.Add(eraserButton);
         actions.Children.Add(BuildImageButton());
         actions.Children.Add(ActionButton(Symbol("M 3,2 H 11 L 14,5 V 14 H 2 V 2 H 3 M 5,2 V 6 H 11 V 2 M 5,14 V 9 H 11 V 14", 17), "Save (Ctrl+S)", 35, delegate { Save(current, false); }));
-        var writing = ActionButton(WithChevron(Label("✧", 18, Text)), "Writing tools", 43, null);
-        AttachMenu(writing, WritingMenu());
-        writingButton = writing;
-        actions.Children.Add(writing);
         var settings = ActionButton(Symbol("M 7,1.4 H 9 L 9.5,3.2 L 11,4 L 12.8,3.5 L 14,5.3 L 12.7,6.8 V 8.5 L 14,10 L 12.8,11.8 L 11,11.3 L 9.5,12.1 L 9,14 H 7 L 6.5,12.1 L 5,11.3 L 3.2,11.8 L 2,10 L 3.3,8.5 V 6.8 L 2,5.3 L 3.2,3.5 L 5,4 L 6.5,3.2 Z M 10.2,7.7 A 2.2,2.2 0 1 1 5.8,7.7 A 2.2,2.2 0 1 1 10.2,7.7 Z", 19), "Settings", 36, delegate { OpenSettings(); });
         actions.Children.Add(settings);
     }
@@ -490,7 +489,7 @@ sealed partial class Inkpad : Window
             if (active) selected = frame;
         }
         if (selected != null) selected.BringIntoView();
-        Title = current == null ? "Inkpad" : current.Name + (current.Dirty ? " •" : "") + " - Inkpad";
+        Title = current == null ? AppName : current.Name + (current.Dirty ? " •" : "") + " - " + AppName;
     }
 
     void ResizePage()
@@ -634,7 +633,7 @@ sealed partial class Inkpad : Window
         characters.Text = count.ToString("N0", CultureInfo.CurrentCulture) + (count == 1 ? " character" : " characters");
         fileMode.Text = drawing ? (shape.HasValue ? shape.Value.ToString() : erasing ? "Eraser" : highlighter ? (textOnlyHighlight ? "Text highlighter" : "Highlighter") : "Pencil") : current.HasInk ? "Text + ink" : current.Formatted ? "Formatted" : current.Markdown ? "Markdown" : "Plain text";
         bool inkFile = current.NeedsInkFile || (current.Path != null && NoteFiles.IsInkFile(current.Path));
-        lineEnding.Text = inkFile ? "Inkpad note" : current.Newline == "\n" ? "Unix (LF)" : current.Newline == "\r" ? "Mac (CR)" : "Windows (CRLF)";
+        lineEnding.Text = inkFile ? NoteTypeName : current.Newline == "\n" ? "Unix (LF)" : current.Newline == "\r" ? "Mac (CR)" : "Windows (CRLF)";
         encodingLabel.Text = inkFile ? "" : current.Encoding.CodePage == 65001 ? "UTF-8" : current.Encoding.WebName.ToUpperInvariant();
         undoInkButton.IsEnabled = current.History.CanReplay(false);
         redoInkButton.IsEnabled = current.History.CanReplay(true);
@@ -723,7 +722,13 @@ sealed partial class Inkpad : Window
 
     void Open()
     {
-        var dialog = new OpenFileDialog { Filter = "Notes and text files|*.inknote;*.txt;*.md;*.log;*.csv;*.json;*.ini|All files|*.*", Multiselect = true, Title = "Open notes" };
+        var dialog = new OpenFileDialog
+        {
+            Filter = "Notes and text files|*" + NoteFiles.InkExtension + ";*" + NoteFiles.LegacyInkExtension +
+                ";*.txt;*.md;*.log;*.csv;*.json;*.ini|All files|*.*",
+            Multiselect = true,
+            Title = "Open notes"
+        };
         if (dialog.ShowDialog(this) == true) OpenFiles(dialog.FileNames);
     }
 
@@ -748,25 +753,35 @@ sealed partial class Inkpad : Window
         return SaveNote(note, askPath, true);
     }
 
+    internal static SaveFileDialog CreateSaveDialog(Note note, bool useInk)
+    {
+        const string noteFilter = NoteTypeName + " (*" + NoteFiles.InkExtension + ")|*" + NoteFiles.InkExtension;
+        const string textFilter = "Text document (*.txt)|*.txt";
+        const string markdownFilter = "Markdown (*.md)|*.md";
+        return new SaveFileDialog
+        {
+            Filter = useInk ? noteFilter :
+                note.Markdown ? markdownFilter + "|" + textFilter + "|" + noteFilter :
+                textFilter + "|" + noteFilter + "|" + markdownFilter,
+            DefaultExt = useInk ? NoteFiles.InkExtension : note.Markdown ? ".md" : ".txt",
+            FileName = note.Path == null ? "Untitled" : System.IO.Path.GetFileNameWithoutExtension(note.Path),
+            InitialDirectory = note.Path == null ? null : System.IO.Path.GetDirectoryName(note.Path),
+            Title = "Save as"
+        };
+    }
+
     bool SaveNote(Note note, bool askPath, bool offerAnotherFolder)
     {
         string path = note.Path;
         bool useInk = note.NeedsInkFile || (path != null && NoteFiles.IsInkFile(path));
         if (askPath || path == null || (useInk && !NoteFiles.IsInkFile(path)))
         {
-            var dialog = new SaveFileDialog
-            {
-                Filter = useInk ? "Inkpad note (*.inknote)|*.inknote" : note.Markdown ? "Markdown (*.md)|*.md|Text document (*.txt)|*.txt|Inkpad note (*.inknote)|*.inknote" : "Text document (*.txt)|*.txt|Inkpad note (*.inknote)|*.inknote|Markdown (*.md)|*.md",
-                DefaultExt = useInk ? ".inknote" : note.Markdown ? ".md" : ".txt",
-                FileName = path == null ? "Untitled" : System.IO.Path.GetFileNameWithoutExtension(path),
-                InitialDirectory = path == null ? null : System.IO.Path.GetDirectoryName(path),
-                Title = "Save as"
-            };
+            var dialog = CreateSaveDialog(note, useInk);
             if (dialog.ShowDialog(this) != true) return false;
             path = dialog.FileName;
-            if (useInk && !NoteFiles.IsInkFile(path))
+            if (NoteFiles.IsLegacyInkFile(path) || (useInk && !NoteFiles.IsInkFile(path)))
             {
-                MessageBox.Show(this, "Use the .inknote extension to save the complete note.", "Save note", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(this, "Use the " + NoteFiles.InkExtension + " extension to save the complete note.", "Save note", MessageBoxButton.OK, MessageBoxImage.Information);
                 return false;
             }
         }
@@ -790,7 +805,7 @@ sealed partial class Inkpad : Window
         catch (UnauthorizedAccessException)
         {
             const string title = "Windows blocked the save";
-            string description = "Inkpad couldn’t write to “" + path + "”. Your edits are still in this tab. You can save a copy in another folder, such as Downloads.";
+            string description = AppName + " couldn’t write to “" + path + "”. Your edits are still in this tab. You can save a copy in another folder, such as Downloads.";
             if (!offerAnotherFolder)
             {
                 ShowNoteDialog(title, description, "Keep editing", null);
@@ -919,9 +934,6 @@ sealed partial class Inkpad : Window
                 case Key.G: GoToLine(); break;
                 case Key.E: ShowSpelling(); break;
                 case Key.P: Print(); break;
-                case Key.Q: if (!Preferences.Writing) return; WriteDraft(); break;
-                case Key.R: if (!Preferences.Writing) return; ApplyWritingTool("Rewrite"); break;
-                case Key.M: if (!Preferences.Writing) return; ApplyWritingTool("Summarize"); break;
                 case Key.Tab: ShowNote(notes[(notes.IndexOf(current) + (shift ? notes.Count - 1 : 1)) % notes.Count]); break;
                 case Key.Z: if (Keyboard.FocusedElement is TextBox) return; Undo(shift); break;
                 case Key.Y: if (Keyboard.FocusedElement is TextBox) return; Undo(true); break;
